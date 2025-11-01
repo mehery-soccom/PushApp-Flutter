@@ -22,8 +22,10 @@ Add this to your app’s pubspec.yaml:
 
 ```yaml
 dependencies:
-  mehery_sender: ^0.0.3
+  mehery_sender: ^0.0.11
 ```
+
+Or the latest version
 
 Run flutter pub get to install.
 
@@ -69,6 +71,14 @@ meSend.setInAppNotification(context);
 ```dart
 tokenSender.initPage("page_name");
 ```
+
+## Platform-specific Setup
+To enable CTA tracking and live/custom notifications for Android and iOS, refer to the following guides:
+
+- [Android Setup Guide](./AndroidREADME.md)
+- [iOS Setup Guide](./IOSREADME.md)
+
+These guides include additional steps for integrating CTA tracking, handling live notifications, and configuring platform-specific settings.
 
 
 ## Notes

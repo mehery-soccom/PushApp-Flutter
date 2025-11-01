@@ -23,3 +23,6 @@
 ## 0.0.11
 - Fixed null assertion warnings
 - Minor improvements
+
+## 0.0.12
+- README added
