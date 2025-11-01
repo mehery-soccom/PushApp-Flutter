@@ -21,7 +21,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 
 
-class MeSend {
+class PushApp {
   late final String serverUrl;
 
   List<Map<String, dynamic>> _notificationQueue = [];
@@ -48,7 +48,7 @@ class MeSend {
   static const _channel = MethodChannel('mehery_channel');
 
 
-  final Map<String, void Function(List<dynamic>)> _placeholderListeners = {};
+  final Map<String, void Function(List<dynamic>,String,String)> _placeholderListeners = {};
 
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get events => _controller.stream;
@@ -58,7 +58,7 @@ class MeSend {
 
 
   // Updated constructor to handle tenant$channelId format
-  MeSend({required String identifier, this.sandbox = false}) :
+  PushApp({required String identifier, this.sandbox = false}) :
         tenant = identifier.split('\$')[0],
         channelId = identifier.split('\$').length > 1 ? identifier.split('\$')[1] : '' {
     serverUrl = 'https://$tenant.pushapp.${sandbox ? "co.in" : "com"}';
@@ -103,7 +103,7 @@ class MeSend {
   }
 
 
-  void registerPlaceholderListener(String placeholderId, void Function(List<dynamic>) callback) {
+  void registerPlaceholderListener(String placeholderId, void Function(List<dynamic>,String,String) callback) {
     _placeholderListeners[placeholderId] = callback;
   }
 
@@ -174,15 +174,19 @@ class MeSend {
         String? firebaseToken = await messaging.getToken();
         if (firebaseToken != null) {
           await prefs.setString('device_token', firebaseToken);
-          await sendTokenToServer('android', firebaseToken);
+          await sendTokenToServer('android', firebaseToken!);
         } else {
           sdkPrint("Failed to retrieve Firebase token on Android.");
         }
       } else if (Platform.isIOS) {
         String? apnsToken = await messaging.getAPNSToken();
         await prefs.setString('device_token', apnsToken!);
-        await sendTokenToServer('ios', apnsToken);
-            } else {
+        if (apnsToken != null) {
+          await sendTokenToServer('ios', apnsToken);
+        } else {
+          sdkPrint("Failed to retrieve APNs token on iOS.");
+        }
+      } else {
         sdkPrint("Unsupported platform.");
       }
     } catch (e) {
@@ -527,7 +531,7 @@ class MeSend {
   void sdkPrint(String? message){
     debugPrint(message);
     if(message != null) {
-      sendMessageToStack(message);
+      sendMessageToStack(message!);
     }
   }
 
@@ -767,9 +771,11 @@ class MeSend {
       }
     }
     if (type?.toLowerCase().contains('floater')) {
-      final align = (style['align'] ?? 'bottom-right').toString();
+      final align = getAlignment(style);
       bool draggable = style['draggable'];
+      sdkPrint("Going in Show Floater");
       if (contentList.isNotEmpty && buildContext != null) {
+        sdkPrint("Calling Show Floater");
         _showFloater(contentList, buildContext!, align: align, draggable: draggable);
       }
     }
@@ -780,7 +786,7 @@ class MeSend {
       print("contentList $contentList");
       if (placeholderId != null && contentList.isNotEmpty) {
         sdkPrint("Dispatching content to placeholder: $placeholderId");
-        _notifyPlaceholder(placeholderId, contentList);
+        _notifyPlaceholder(placeholderId, contentList,messageId,filterId);
       } else {
         sdkPrint("Placeholder data invalid or content missing.");
       }
@@ -789,10 +795,10 @@ class MeSend {
 
 
 
-  void _notifyPlaceholder(String placeholderId, List<dynamic> contentList) {
+  void _notifyPlaceholder(String placeholderId, List<dynamic> contentList, String? messageId, String? filterId) {
     final listener = _placeholderListeners[placeholderId];
     if (listener != null) {
-      listener(contentList);
+      listener(contentList,messageId!,filterId!);
     } else {
       sdkPrint("No listener registered for placeholder: $placeholderId");
     }
@@ -812,7 +818,25 @@ class MeSend {
 
     final htmlContent = contentList.first as String;
 
-    final controller = WebViewController();
+    // --- START WebViewController INITIALIZATION (FIXED FOR iOS VIDEO) ---
+    PlatformWebViewControllerCreationParams params;
+    if (Platform.isIOS) {
+      // 1. Define the WebKit parameters
+      params = WebKitWebViewControllerCreationParams(
+        // CRITICAL FIX 1: Set allowsInlineMediaPlayback to true
+        allowsInlineMediaPlayback: true,
+        // CRITICAL FIX 2: Allows autoplay for ALL media types
+        mediaTypesRequiringUserAction: {},
+      );
+    } else {
+      // 2. Use the default configuration for other platforms
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    // 3. Create the controller using the platform parameters
+    final controller = WebViewController.fromPlatformCreationParams(params);
+    // --- END WebViewController INITIALIZATION ---
+
 
     controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -830,17 +854,35 @@ class MeSend {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) async {
-            // Inject JS bridge for CTA clicks
             await controller.runJavaScript('''
-            window.handleClick = function(eventType, lab, val) {
-              var message = JSON.stringify({
-                event: eventType,
-                timestamp: Date.now(),
-                data: { url: "", label: lab, value: val }
+          window.handleClick = function(eventType, lab, val) {
+            var message = JSON.stringify({
+              event: eventType,
+              timestamp: Date.now(),
+              data: { url: "", label: lab, value: val }
+            });
+            InAppChannel.postMessage(message);
+          };
+        ''');
+
+            // ✅ Enhanced JS to aggressively disable controls/fullscreen
+            await controller.runJavaScript('''
+          document.querySelectorAll('video').forEach(function(v) {
+            v.controls = false;
+            v.removeAttribute('controls'); // Aggressive control removal
+            v.style.pointerEvents = 'none'; // Prevents tap-to-fullscreen
+            v.muted = true;
+            v.playsInline = true;
+            v.autoplay = true;
+
+            var playPromise = v.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(function(error) {
+                console.log('Autoplay blocked', error);
               });
-              InAppChannel.postMessage(message);
-            };
-          ''');
+            }
+          });
+        ''');
           },
           onNavigationRequest: (request) {
             final url = request.url;
@@ -871,167 +913,507 @@ class MeSend {
       context: context,
       barrierDismissible: true,
       barrierColor: Colors.transparent,
-      builder: (ctx) => Stack(
-        children: [
-          Align(
-            alignment: alignment,
-            child: Container(
-              height: 200,
-              width: 120,
-              margin: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [BoxShadow(blurRadius: 8, color: Colors.black26)],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Stack(
-                  children: [
-                    /// WebView Content
-                    WebViewWidget(controller: controller),
-
-                    /// Overlay Click Handler
-                    Positioned.fill(
-                      child: Material(
+      builder: (ctx) => Material(
+        type: MaterialType.transparency, // Removes white dialog background
+        child: Stack(
+          children: [
+            Align(
+              alignment: alignment,
+              child: Container(
+                height: 200,
+                width: 120,
+                margin: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: const [
+                    BoxShadow(blurRadius: 8, color: Colors.black26),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Stack(
+                    children: [
+                      /// WebView Content
+                      Container(
                         color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () {
-                            Navigator.of(ctx).pop();
-                            _showPopupRoadblock([htmlContent], messageId, filterId, context);
+                        child: WebViewWidget(controller: controller),
+                      ),
 
-                          },
+                      /// Overlay Click Handler (transparent touch layer)
+                      Positioned.fill(
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () {
+                              Navigator.of(ctx).pop();
+                              _showPopupRoadblock(
+                                  [htmlContent], messageId, filterId, context);
+                            },
+                          ),
                         ),
                       ),
-                    ),
 
-                    /// Share Icon on Top-Right
-                    InkWell(
-                      child: Positioned(
+                      /// Share Icon on Top-Right
+                      Positioned(
                         top: 8,
                         right: 8,
-                        child: Container(
-                          height: 32,
-                          width: 32,
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Center(
-                            child: Image.asset(
-                              'assets/images/share.png',
-                              height: 18,
-                              width: 18,
-                              color: Colors.white,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _showPopupRoadblock(
+                                [htmlContent], messageId, filterId, context);
+                          },
+                          child: Container(
+                            height: 32,
+                            width: 32,
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Image.asset(
+                                'assets/images/share.png',
+                                height: 18,
+                                width: 18,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                      onTap: () {
-                        Navigator.of(ctx).pop();
-                        _showPopupRoadblock([htmlContent], messageId, filterId, context);
-
-                      },
-                    )
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showFloater(
+      List<dynamic> contentList,
+      BuildContext context, {
+        String align = "bottom-right", // supports 9 alignments
+        bool draggable = false,
+      }) {
+    if (contentList.isEmpty || contentList.first is! String) return;
+    final String finalAlign = align;
+    final htmlContent = contentList.first as String;
+
+    // --- START WebViewController INITIALIZATION (FIXED FOR iOS VIDEO) ---
+    PlatformWebViewControllerCreationParams params;
+    if (Platform.isIOS) {
+      // 1. Define the WebKit parameters
+      params = WebKitWebViewControllerCreationParams(
+        // CRITICAL FIX 1: Set allowsInlineMediaPlayback to true
+        allowsInlineMediaPlayback: true,
+        // CRITICAL FIX 2: Allows autoplay for ALL media types
+        mediaTypesRequiringUserAction: {},
+      );
+    } else {
+      // 2. Use the default configuration for other platforms
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    // 3. Create the controller using the platform parameters
+    final controller = WebViewController.fromPlatformCreationParams(params);
+    // --- END WebViewController INITIALIZATION ---
+
+    controller
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..addJavaScriptChannel(
+        'InAppChannel',
+        onMessageReceived: (JavaScriptMessage message) {
+          if (Navigator.canPop(context)) {
+            Navigator.of(context).pop();
+          }
+          _onNotificationClosed();
+        },
+      )
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (url) async {
+            await controller.runJavaScript('''
+          window.handleClick = function(eventType, lab, val) {
+            var message = JSON.stringify({
+              event: eventType,
+              timestamp: Date.now(),
+              data: { url: "", label: lab, value: val }
+            });
+            InAppChannel.postMessage(message);
+          };
+        ''');
+
+            await controller.runJavaScript('''
+          document.querySelectorAll('video').forEach(function(v) {
+            v.controls = false;
+            v.removeAttribute('controls'); 
+            v.style.pointerEvents = 'none'; 
+            v.muted = true;
+            v.playsInline = true;
+            v.autoplay = true;
+
+            var playPromise = v.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(function(error) {
+                console.log('Autoplay blocked', error);
+              });
+            }
+          });
+        ''');
+          },
+          onNavigationRequest: (request) {
+            final url = request.url;
+            if (url.startsWith('http')) {
+              _handleCta(url);
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+        ),
+      )
+      ..loadHtmlString(htmlContent);
+
+    // Map align string to Alignment
+    final alignment = {
+      'top-left': Alignment.topLeft,
+      'top-center': Alignment.topCenter,
+      'top-right': Alignment.topRight,
+      'center-left': Alignment.centerLeft,
+      'center-center': Alignment.center,
+      'center-right': Alignment.centerRight,
+      'bottom-left': Alignment.bottomLeft,
+      'bottom-center': Alignment.bottomCenter,
+      'bottom-right': Alignment.bottomRight,
+    }[align] ?? Alignment.bottomRight;
+
+    // --- START OF INLINE DRAG IMPLEMENTATION ---
+
+    // 1. Define fixed dimensions based on your code (200x200 + 12 margin)
+    const floaterHeight = 200.0;
+    const floaterWidth = 200.0;
+    const floaterMargin = 12.0;
+
+    // 2. Variable to hold and persist the current position (must be mutable outside StatefulBuilder)
+    Offset? _currentOffset;
+
+    // Helper function to calculate initial Positioned Offset from Alignment
+    Offset _getInitialOffset(Alignment align, Size screenSize) {
+      // Total occupied space (floater size + 2 * margin)
+      final totalWidth = floaterWidth + 2 * floaterMargin;
+      final totalHeight = floaterHeight + 2 * floaterMargin;
+
+      // Calculate top-left X position
+      double x = (screenSize.width - totalWidth) * ((align.x + 1) / 2);
+      // Calculate top-left Y position
+      double y = (screenSize.height - totalHeight) * ((align.y + 1) / 2);
+
+      // Positioned's left/top is relative to the Stack.
+      // The margin is applied to the Container's content, effectively pushing the entire block.
+      // We add the margin back to align the Container's left/top corner correctly relative to the stack.
+      x += floaterMargin;
+      y += floaterMargin;
+
+      var addedOffsetX = 0.0;
+      var addedOffsetY = 0.0;
+
+      if (finalAlign.contains('bottom')) {
+        addedOffsetY = 100.0;
+      }
+      if (finalAlign.contains('right')) {
+        addedOffsetX = 20.0;
+      }
+
+      return Offset(x-addedOffsetX, y-addedOffsetY);
+    }
+
+    // Display the floater using a transparent dialog
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      // Using a near-transparent color to prevent system blur/grey barrier
+      barrierColor: const Color(0x01000000),
+      builder: (ctx) => StatefulBuilder(
+        builder: (stfContext, setState) {
+
+          // 3. Calculate initial offset once (using context for screen size)
+          if (_currentOffset == null) {
+            final screenSize = MediaQuery.of(stfContext).size;
+            _currentOffset = _getInitialOffset(alignment, screenSize);
+          }
+
+          // The core floater content widget
+          final floaterContent = Container(
+            height: floaterHeight,
+            width: floaterWidth,
+            margin: const EdgeInsets.all(floaterMargin),
+            decoration: const BoxDecoration(
+              color: Color(0x00000000),
+              // REMOVED: No borderRadius here
+            ),
+            child:
+            // REMOVED: ClipRRect wrapper
+            Stack(
+              children: [
+                /// WebView Content
+                Container(
+                  color: Colors.transparent,
+                  child: WebViewWidget(controller: controller),
+                ),
+              ],
+            ),
+          );
+
+          Widget positionedWidget;
+
+          if (draggable) {
+            final screenSize = MediaQuery.of(stfContext).size;
+
+            positionedWidget = Positioned(
+              left: _currentOffset!.dx,
+              top: _currentOffset!.dy,
+              child: GestureDetector(
+                onPanUpdate: (details) {
+                  setState(() {
+                    // Update the offset, keeping it within screen bounds
+                    _currentOffset = Offset(
+                      (_currentOffset!.dx + details.delta.dx).clamp(
+                          floaterMargin, // Left bound
+                          screenSize.width - floaterWidth - floaterMargin // Right bound
+                      ),
+                      (_currentOffset!.dy + details.delta.dy).clamp(
+                          floaterMargin, // Top bound
+                          screenSize.height - floaterHeight - floaterMargin // Bottom bound
+                      ),
+                    );
+                  });
+                },
+                child: floaterContent,
+              ),
+            );
+          } else {
+            // Original non-draggable alignment
+            positionedWidget = Align(
+              alignment: alignment,
+              child: floaterContent,
+            );
+          }
+
+          return Material(
+            type: MaterialType.transparency, // Removes white dialog background
+            child: Stack(
+              children: [
+                positionedWidget, // Either Positioned/GestureDetector or Align
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 
 
 
+//   // GLOBAL VARIABLE
+//   OverlayEntry? _floaterEntry;
+//
+// // NOTE: You must have a way to manage AppLifecycle.isAppInForeground
+// // See the Prerequisite section above.
+//
+//   void _showFloater(
+//       List<dynamic> contentList,
+//       BuildContext context, {
+//         String align = "bottom-right",
+//         bool draggable = false,
+//       }) {
+//
+//     // --- 🛑 CORE RESOLUTION FIX: GUARD CLAUSE 🛑 ---
+//     // If the floater is triggered while the app is paused (or coming from background),
+//     // this prevents it from being inserted until the app explicitly calls this method
+//     // AFTER the AppLifecycleState.resumed state is fully processed.
+//     if (!AppLifecycle.isAppInForeground) {
+//       debugPrint("❌ Floater prevented: App is not in the foreground.");
+//       return;
+//     }
+//     // ----------------------------------------------
+//
+//     if (contentList.isEmpty || contentList.first is! String) return;
+//
+//     // Wrap the entire show logic in a post-frame callback for timing stability.
+//     WidgetsBinding.instance.addPostFrameCallback((_) {
+//
+//       // --- STABILITY FIX 1: Check and remove existing entry ---
+//       if (_floaterEntry != null) {
+//         _floaterEntry!.remove();
+//         _floaterEntry = null;
+//         debugPrint("✅ Removed old floater entry before creating a new one.");
+//       }
+//       // --------------------------------------------------------
+//
+//       final htmlContent = contentList.first as String;
+//
+//       // --- WebViewController INITIALIZATION (FIXED FOR 4.4.2) ---
+//       PlatformWebViewControllerCreationParams params;
+//       if (Platform.isIOS) {
+//         params = WebKitWebViewControllerCreationParams(
+//           allowsInlineMediaPlayback: true,
+//           mediaTypesRequiringUserAction: {},
+//         );
+//       } else {
+//         params = const PlatformWebViewControllerCreationParams();
+//       }
+//
+//       final controller = WebViewController.fromPlatformCreationParams(params);
+//       // --- END WebViewController Initialization ---
+//
+//       controller..setJavaScriptMode(JavaScriptMode.unrestricted)
+//         ..setBackgroundColor(const Color(0x00000000))
+//         ..setNavigationDelegate(
+//           NavigationDelegate(
+//             onPageFinished: (url) async {
+//               // 1. JS Channel setup (simplified)
+//               await controller.runJavaScript('''
+//               window.handleClick = function(eventType, lab, val) {
+//                 var message = JSON.stringify({
+//                   event: eventType,
+//                   timestamp: Date.now(),
+//                   data: { url: "", label: lab, value: val }
+//                 });
+//                 // InAppChannel.postMessage(message);
+//               };
+//             ''');
+//
+//               // 2. Autoplay and Controls Fix
+//               await controller.runJavaScript('''
+//               document.querySelectorAll('video').forEach(function(v) {
+//                 v.controls = false;
+//                 v.removeAttribute('controls');
+//                 v.style.pointerEvents = 'none';
+//                 v.muted = true;
+//                 v.playsInline = true;
+//                 v.autoplay = true;
+//
+//                 var playPromise = v.play();
+//                 if (playPromise !== undefined) {
+//                   playPromise.catch(function(error) {
+//                     console.log('Autoplay blocked', error);
+//                   });
+//                 }
+//               });
+//             ''');
+//             },
+//           ),
+//         )
+//         ..loadHtmlString(htmlContent);
+//
+//       final overlay = Navigator.of(context).overlay;
+//       if (overlay == null) {
+//         debugPrint("❌ No Overlay found in this context!");
+//         return;
+//       }
+//
+//       final size = MediaQuery.of(context).size;
+//       const double floaterSize = 200.0;
+//       const double padding = 16.0;
+//
+//       // Alignment-based starting position
+//       Offset initialOffset;
+//       switch (align) {
+//         case "top-left":
+//           initialOffset = const Offset(padding, padding);
+//           break;
+//         case "top-right":
+//           initialOffset = Offset(size.width - floaterSize - padding, padding);
+//           break;
+//         case "bottom-left":
+//           initialOffset = Offset(padding, size.height - floaterSize - padding);
+//           break;
+//         case "bottom-right":
+//         default:
+//           initialOffset = Offset(
+//             size.width - floaterSize - padding,
+//             size.height - floaterSize - padding,
+//           );
+//       }
+//
+//       final positionNotifier = ValueNotifier<Offset>(initialOffset);
+//       final showWebView = ValueNotifier(false);
+//
+//       final entry = OverlayEntry(
+//         builder: (ctx) => ValueListenableBuilder<Offset>(
+//           valueListenable: positionNotifier,
+//           builder: (context, offset, _) {
+//             return Positioned(
+//               left: offset.dx,
+//               top: offset.dy,
+//               child: GestureDetector(
+//                 onPanUpdate: draggable
+//                     ? (details) {
+//                   final newOffset = Offset(
+//                     offset.dx + details.delta.dx,
+//                     offset.dy + details.delta.dy,
+//                   );
+//                   positionNotifier.value = Offset(
+//                     newOffset.dx.clamp(0, size.width - floaterSize),
+//                     newOffset.dy.clamp(0, size.height - floaterSize),
+//                   );
+//                 }
+//                     : null,
+//                 child: AnimatedOpacity(
+//                   opacity: 1,
+//                   duration: const Duration(milliseconds: 200),
+//                   child: RepaintBoundary(
+//                     child: Container(
+//                       height: floaterSize,
+//                       width: floaterSize,
+//                       decoration: BoxDecoration(
+//                         color: Colors.transparent,
+//                         borderRadius: BorderRadius.circular(16),
+//                       ),
+//                       child: ClipRRect(
+//                         borderRadius: BorderRadius.circular(16),
+//                         child: ValueListenableBuilder<bool>(
+//                           valueListenable: showWebView,
+//                           builder: (context, visible, _) {
+//                             if (!visible) return const SizedBox.shrink();
+//                             return WebViewWidget(controller: controller);
+//                           },
+//                         ),
+//                       ),
+//                     ),
+//                   ),
+//                 ),
+//               ),
+//             );
+//           },
+//         ),
+//       );
+//
+//       // Insert the entry into the overlay
+//       overlay.insert(entry);
+//       entry.markNeedsBuild();
+//
+//       // Use a short delay before showing the WebView contents for surface stability
+//       Future.delayed(const Duration(milliseconds: 200), () {
+//         showWebView.value = true;
+//       });
+//
+//       _floaterEntry = entry;
+//     }); // End of addPostFrameCallback
+//   }
+//
+// // --- HIDE FLOATER FUNCTION ---
+//   void _hideFloater() {
+//     _floaterEntry?.remove();
+//     _floaterEntry = null;
+//   }
 
-
-  OverlayEntry? _floaterEntry;
-
-  void _showFloater(
-      List<dynamic> contentList,
-      BuildContext context, {
-        String align = "bottom-right",
-        bool draggable = false,
-      }) {
-    if (contentList.isEmpty || contentList.first is! String) return;
-
-    final htmlContent = contentList.first as String;
-
-    final controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.transparent)
-      ..loadHtmlString(htmlContent);
-
-    final overlay = Overlay.of(context);
-
-    // ✅ Initial position based on alignment
-    Offset initialOffset;
-    switch (align) {
-      case "top-left":
-        initialOffset = const Offset(20, 20);
-        break;
-      case "top-right":
-        initialOffset = Offset(MediaQuery.of(context).size.width - 220, 20);
-        break;
-      case "bottom-left":
-        initialOffset = Offset(20, MediaQuery.of(context).size.height - 220);
-        break;
-      case "bottom-right":
-      default:
-        initialOffset = Offset(
-          MediaQuery.of(context).size.width - 220,
-          MediaQuery.of(context).size.height - 220,
-        );
-    }
-
-    final positionNotifier = ValueNotifier<Offset>(initialOffset);
-
-    _floaterEntry = OverlayEntry(
-      builder: (ctx) {
-        return ValueListenableBuilder<Offset>(
-          valueListenable: positionNotifier,
-          builder: (context, offset, _) {
-            final floater = RepaintBoundary(
-              child: Container(
-                height: 200,
-                width: 200,
-                decoration: const BoxDecoration(
-                  color: Colors.transparent,
-                ),
-                child: AbsorbPointer(
-                  absorbing: !draggable,
-                  child: ClipRect( // ✅ clean clip, no AA blending
-                    clipBehavior: Clip.hardEdge,
-                    child: WebViewWidget(controller: controller),
-                  ),
-                ),
-              ),
-            );
-
-            return Positioned(
-              left: offset.dx,
-              top: offset.dy,
-              child: draggable
-                  ? GestureDetector(
-                onPanUpdate: (details) {
-                  positionNotifier.value = Offset(
-                    offset.dx + details.delta.dx,
-                    offset.dy + details.delta.dy,
-                  );
-                },
-                child: floater,
-              )
-                  : floater,
-            );
-          },
-        );
-      },
-    );
-
-    overlay.insert(_floaterEntry!);
-  }
 
 
   void _showBanner(
@@ -1348,7 +1730,7 @@ class MeSend {
       String messageId,
       String filterId,
       BuildContext context,
-      ) {
+      ) async {
     String htmlContent = '';
     String imageUrl = '';
 
@@ -1377,8 +1759,28 @@ class MeSend {
 
     Widget contentWidget;
 
+    // --- START WebViewController INITIALIZATION (FIXED FOR 4.4.2) ---
+    PlatformWebViewControllerCreationParams params;
+    if (Platform.isIOS) {
+      // 1. Define the parameters directly on the WebKitWebViewControllerCreationParams
+      // This structure is compatible with webview_flutter 4.4.2 and fixes the errors.
+      params = WebKitWebViewControllerCreationParams(
+        // CRITICAL FIX: Set allowsInlineMediaPlayback to true at creation
+        // This prevents the video from going fullscreen on iOS.
+        allowsInlineMediaPlayback: true,
+        // Allows autoplay for ALL media types (resolves the 'none' error)
+        mediaTypesRequiringUserAction: {},
+      );
+    } else {
+      // 2. Use the default configuration for other platforms
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    // 3. Create the controller using the platform parameters
+    final controller = WebViewController.fromPlatformCreationParams(params);
+    // --- END WebViewController INITIALIZATION ---
+
     if (htmlContent.isNotEmpty) {
-      final controller = WebViewController();
 
       controller
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -1394,6 +1796,7 @@ class MeSend {
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (url) async {
+              // Re-define JS helper function
               await controller.runJavaScript('''
               window.handleClick = function(eventType, lab, val) {
                 var message = JSON.stringify({
@@ -1405,18 +1808,27 @@ class MeSend {
               };
             ''');
 
-              // Autoplay fix
+              // Autoplay, Controls, and Fullscreen Fix (JS injection)
               await controller.runJavaScript('''
               document.querySelectorAll('video').forEach(function(v) {
                 // Remove or override poster
-                v.removeAttribute('poster'); // Option 1: remove poster
-                // v.setAttribute('poster', 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='); // Option 2: transparent pixel
+                v.removeAttribute('poster'); 
+                
+                // Set all required attributes and properties
                 v.muted = true;
                 v.playsInline = true;
                 v.autoplay = true;
+
+                // **Aggressive control removal**
+                v.controls = false; 
+                v.removeAttribute('controls');
+                
+                // **Prevents the video from being a tap target for native controls/fullscreen**
+                v.style.pointerEvents = 'none';
+
                 var playPromise = v.play();
                 if (playPromise !== undefined) {
-                  playPromise.catch(funcion(error) {
+                  playPromise.catch(function(error) {
                     console.log('Autoplay blocked', error);
                   });
                 }
@@ -1449,6 +1861,7 @@ class MeSend {
 
       contentWidget = WebViewWidget(controller: controller);
     } else {
+      // ... (Image handling remains the same)
       contentWidget = Image.network(
         imageUrl,
         fit: BoxFit.contain,
@@ -1933,7 +2346,7 @@ class SocketService {
   void _sendAuthMessage() async{
     if (_channel != null && _userId != null) {
       sdkPrint("Auth Called");
-      var deviceId = await MeSend.getDeviceId();
+      var deviceId = await PushApp.getDeviceId();
       // if (Platform.isAndroid) {
       // } else if (Platform.isIOS) {
       //   final iosInfo = await _deviceInfoPlugin.iosInfo;
@@ -2006,7 +2419,7 @@ class SocketService {
 class MeSendTooltipWrapper extends StatefulWidget {
   final String placeholderId;
   final Widget child;
-  final MeSend meSend;
+  final PushApp meSend;
 
   const MeSendTooltipWrapper({
     super.key,
@@ -2028,7 +2441,7 @@ class _MeSendTooltipWrapperState extends State<MeSendTooltipWrapper> {
   void initState() {
     super.initState();
     widget.meSend.sendWidgetOpen(widget.placeholderId);
-    widget.meSend.registerPlaceholderListener(widget.placeholderId, _onHtmlReceived);
+    // widget.meSend.registerPlaceholderListener(widget.placeholderId, _onHtmlReceived);
   }
 
   @override
@@ -2156,7 +2569,7 @@ class MeSendWidget extends StatefulWidget {
   final String placeholderId;
   final double height;
   final double width;
-  final MeSend meSend;
+  final PushApp meSend;
 
   const MeSendWidget({
     Key? key,
@@ -2211,33 +2624,37 @@ class _MeSendWidgetState extends State<MeSendWidget> {
       );
   }
 
-  void _onContentReceived(List<dynamic> contentList) {
+  void _onContentReceived(List<dynamic> contentList,String messageId, String filterId ) {
     if (contentList.isEmpty || contentList.first is! String) return;
 
     final rawHtml = contentList.first as String;
 
-    // Wrap HTML with viewport and essential CSS to prevent unwanted initial margins/behavior
+    // 1️⃣ Wrap HTML in proper document structure
     final html = '''
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-          <style>
-              body, html { 
-                  margin: 0; 
-                  padding: 0; 
-                  /* Ensure the HTML body is not taller than its content */
-                  height: 100%; 
-                  width: 100%;
-              }
-          </style>
-      </head>
-      <body>
-          $rawHtml
-      </body>
-      </html>
-    ''';
-
+  <!DOCTYPE html>
+  <html>
+  <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+      <style>
+          body, html { 
+              margin: 0; 
+              padding: 0; 
+              height: 100%; 
+              width: 100%;
+              overflow: hidden;
+              background-color: transparent;
+          }
+          video {
+              max-width: 100%;
+              height: auto;
+          }
+      </style>
+  </head>
+  <body>
+      $rawHtml
+  </body>
+  </html>
+  ''';
 
     if (!mounted) return;
 
@@ -2245,10 +2662,95 @@ class _MeSendWidgetState extends State<MeSendWidget> {
       _htmlContent = html;
     });
 
-    if (_controller != null) {
-      _controller!.loadHtmlString(html);
+    // 2️⃣ Setup WebViewController with same logic as popup
+    late final PlatformWebViewControllerCreationParams params;
+
+    if (Platform.isIOS) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+      );
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
     }
+
+    final controller = WebViewController.fromPlatformCreationParams(params);
+
+    controller
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..addJavaScriptChannel(
+        'InAppChannel',
+        onMessageReceived: (JavaScriptMessage message) {
+          // 👇 handle CTA or events received from JS
+          widget.meSend._handleJsMessage(message.message, messageId, filterId); // Add IDs if available
+        },
+      )
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (url) async {
+            // CTA bridge: connect JS events to Dart
+            await controller.runJavaScript('''
+            window.handleClick = function(eventType, lab, val) {
+              var message = JSON.stringify({
+                event: eventType,
+                timestamp: Date.now(),
+                data: { url: "", label: lab, value: val }
+              });
+              InAppChannel.postMessage(message);
+            };
+          ''');
+
+            // Video autoplay + inline fix
+            await controller.runJavaScript('''
+            document.querySelectorAll('video').forEach(function(v) {
+              v.removeAttribute('poster');
+              v.controls = false;
+              v.muted = true;
+              v.playsInline = true;
+              v.autoplay = true;
+              try { v.load(); v.currentTime = 0; } catch (e) {}
+              var playPromise = v.play();
+              if (playPromise !== undefined) {
+                playPromise.catch(function(error) {
+                  console.log('Autoplay blocked', error);
+                });
+              }
+              const observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                  if (m.attributeName === 'poster') v.removeAttribute('poster');
+                });
+              });
+              observer.observe(v, { attributes: true });
+            });
+          ''');
+
+            // Ensure viewport meta for iOS
+            if (Platform.isIOS) {
+              await controller.runJavaScript('''
+              if (!document.querySelector('meta[name=viewport]')) {
+                var meta = document.createElement('meta');
+                meta.name = 'viewport';
+                meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+                document.head.appendChild(meta);
+              }
+            ''');
+            }
+          },
+          onNavigationRequest: (request) {
+            final url = request.url;
+            if (url.startsWith('http')) {
+              widget.meSend._handleCta(url); // 🔗 handle CTA link click
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+        ),
+      )
+      ..loadHtmlString(html);
+
+    _controller = controller;
   }
+
 
   @override
   void dispose() {
@@ -2285,9 +2787,9 @@ class MeSendRouteObserver extends NavigatorObserver {
   factory MeSendRouteObserver() => _instance;
   MeSendRouteObserver._internal();
 
-  MeSend? _meSend;
+  PushApp? _meSend;
 
-  void attachSDK(MeSend sdkInstance) {
+  void attachSDK(PushApp sdkInstance) {
     _meSend = sdkInstance;
   }
 
@@ -2447,7 +2949,7 @@ class TooltipSdk extends ChangeNotifier {
   }) {
     final controller = SuperTooltipController();
     _controllers[placeholderId] = controller;
-    // print('Saved controller hash: ${identityHashCode(controller)}');
+    print('Saved controller hash: ${identityHashCode(controller)}');
 
     return AnimatedBuilder(
       animation: this, // listens to notifyListeners()
@@ -2456,7 +2958,7 @@ class TooltipSdk extends ChangeNotifier {
         final screenWidth = MediaQuery.of(context).size.width;
 
         // Helper function to build TextStyle from styles list
-        TextStyle buildTextStyle({
+        TextStyle _buildTextStyle({
           required double fontSize,
           required String color,
           required List<String> styles,
@@ -2500,7 +3002,7 @@ class TooltipSdk extends ChangeNotifier {
                             if (style.line1Icon.isNotEmpty)
                               Text(
                                 style.line1Icon,
-                                style: buildTextStyle(
+                                style: _buildTextStyle(
                                   fontSize: style.line1Size,
                                   color: style.line1Color,
                                   styles: style.line1TextStyles,
@@ -2510,7 +3012,7 @@ class TooltipSdk extends ChangeNotifier {
                             Flexible(
                               child: Text(
                                 style.line1,
-                                style: buildTextStyle(
+                                style: _buildTextStyle(
                                   fontSize: style.line1Size,
                                   color: style.line1Color,
                                   styles: style.line1TextStyles,
@@ -2524,7 +3026,7 @@ class TooltipSdk extends ChangeNotifier {
                     if (style.line2.isNotEmpty)
                       Text(
                         style.line2,
-                        style: buildTextStyle(
+                        style: _buildTextStyle(
                           fontSize: style.line2Size,
                           color: style.line2Color,
                           styles: style.line2TextStyles,
@@ -2595,7 +3097,7 @@ class TooltipSdk extends ChangeNotifier {
   /// Show tooltip for a registered placeholder
   Future<void> showTooltipFor(String placeholderId) async {
     final controller = _controllers[placeholderId];
-    // print('Retrieved controller hash: ${identityHashCode(controller)}');
+    print('Retrieved controller hash: ${identityHashCode(controller)}');
     if (controller != null) {
       debugPrint("🚀 Showing tooltip for $placeholderId");
       await controller.showTooltip();
@@ -2605,7 +3107,12 @@ class TooltipSdk extends ChangeNotifier {
   }
 }
 
-
+// Add this helper class file somewhere accessible, e.g., app_state.dart
+class AppLifecycle {
+  // Set this to true in didChangeAppLifecycleState when state is resumed
+  // Set this to false in didChangeAppLifecycleState when state is paused/inactive
+  static bool isAppInForeground = true;
+}
 
 
 

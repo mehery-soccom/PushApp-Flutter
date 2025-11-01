@@ -37,7 +37,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   static const MethodChannel _channel = MethodChannel('com.yourapp/live_activity');
 
-  final MeSend _tokenSender = MeSend( // Replace with your server URL
+  final PushApp _tokenSender = PushApp( // Replace with your server URL
     identifier : 'MeheryTestFlutter_1734160381705'
   );
 
