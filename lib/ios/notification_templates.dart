@@ -9,7 +9,7 @@ class IOSNotificationTemplates {
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
-      attachments: imageUrl != null 
+      attachments: imageUrl != null
           ? [DarwinNotificationAttachment(imageUrl)]
           : null,
       categoryIdentifier: 'standard',
@@ -30,7 +30,7 @@ class IOSNotificationTemplates {
       presentBadge: true,
       presentSound: true,
       subtitle: "Estimated arrival: $estimatedTime",
-      attachments: driverImageUrl != null 
+      attachments: driverImageUrl != null
           ? [DarwinNotificationAttachment(driverImageUrl)]
           : null,
       threadIdentifier: 'delivery_notifications',

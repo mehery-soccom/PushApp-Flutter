@@ -36,19 +36,19 @@ class NotificationConfig {
       title: json['title'] ?? '',
       subtitle: json['subtitle'] ?? '',
       imageUrl: json['image_url'],
-      backgroundColor: json['background_color'] != null 
+      backgroundColor: json['background_color'] != null
           ? Color(int.parse(json['background_color'], radix: 16))
           : null,
       backgroundImageUrl: json['background_image_url'],
       titleFontSize: json['title_font_size']?.toDouble(),
       subtitleFontSize: json['subtitle_font_size']?.toDouble(),
-      titleColor: json['title_color'] != null 
+      titleColor: json['title_color'] != null
           ? Color(int.parse(json['title_color'], radix: 16))
           : null,
-      subtitleColor: json['subtitle_color'] != null 
+      subtitleColor: json['subtitle_color'] != null
           ? Color(int.parse(json['subtitle_color'], radix: 16))
           : null,
-      buttons: (json['buttons'] as List?)?.map((b) => 
+      buttons: (json['buttons'] as List?)?.map((b) =>
           NotificationButton.fromJson(b)).toList(),
     );
   }
@@ -71,10 +71,10 @@ class NotificationButton {
     return NotificationButton(
       text: json['text'] ?? '',
       action: json['action'] ?? '',
-      backgroundColor: json['background_color'] != null 
+      backgroundColor: json['background_color'] != null
           ? Color(int.parse(json['background_color'], radix: 16))
           : null,
-      textColor: json['text_color'] != null 
+      textColor: json['text_color'] != null
           ? Color(int.parse(json['text_color'], radix: 16))
           : null,
     );

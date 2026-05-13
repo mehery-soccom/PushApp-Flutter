@@ -3,6 +3,7 @@ library mehery_sender;
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:app_set_id/app_set_id.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
 import 'package:device_info_plus/device_info_plus.dart';
@@ -13,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_html/flutter_html.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:super_tooltip/super_tooltip.dart';
@@ -21,7 +23,151 @@ import 'package:url_launcher/url_launcher.dart';
 
 
 
-class PushApp {
+String? _meSendExtractSessionIdFromDynamic(dynamic decoded, [int depth = 0]) {
+  if (depth > 12 || decoded == null || decoded is! Map) return null;
+  final m = Map<String, dynamic>.from(decoded as Map);
+  for (final k in ['session_id', 'sessionId']) {
+    final v = m[k];
+    if (v != null && v.toString().trim().isNotEmpty) {
+      return v.toString().trim();
+    }
+  }
+  for (final nestKey in [
+    'session',
+    'data',
+    'device',
+    'payload',
+    'meta',
+    'result',
+    'extra',
+    'response',
+  ]) {
+    final nested = m[nestKey];
+    if (nested is Map) {
+      final found = _meSendExtractSessionIdFromDynamic(nested, depth + 1);
+      if (found != null) return found;
+    }
+  }
+  final results = m['results'];
+  if (results is List) {
+    for (final item in results) {
+      if (item is Map) {
+        final found = _meSendExtractSessionIdFromDynamic(
+          Map<String, dynamic>.from(item),
+          depth + 1,
+        );
+        if (found != null) return found;
+      }
+    }
+  }
+  return null;
+}
+
+String? _meSendExtractSessionIdFromBody(String body) {
+  try {
+    return _meSendExtractSessionIdFromDynamic(jsonDecode(body));
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Location/session payload you supply for [Pushapp.postSessionGeo].
+///
+/// Serialized as the **`geoIP`** object in `POST /pushapp/api/session/geo`.
+class PushSessionGeoData {
+  /// IPv4 address for this device/session (as your app or backend determines).
+  final String ip;
+
+  /// Latitude in decimal degrees (WGS‑84).
+  final double lat;
+
+  /// Longitude in decimal degrees (WGS‑84).
+  final double lng;
+
+  /// Country ISO code (e.g. `IN`, `US`).
+  final String countryIsoCode;
+
+  /// Country display name.
+  final String countryName;
+
+  /// Region/state ISO code (e.g. `MH`, `NY`).
+  final String regionIsoCode;
+
+  /// Region/state display name.
+  final String regionName;
+
+  /// City name.
+  final String cityName;
+
+  /// Area/neighborhood name (or locality).
+  final String areaName;
+
+  const PushSessionGeoData({
+    required this.ip,
+    required this.lat,
+    required this.lng,
+    required this.countryIsoCode,
+    required this.countryName,
+    required this.regionIsoCode,
+    required this.regionName,
+    required this.cityName,
+    required this.areaName,
+  });
+
+  Map<String, dynamic> toGeoIpJson() => {
+        'ip': ip,
+        'location': {
+          'lat': lat,
+          'lng': lng,
+        },
+        'country': {
+          'iso_code': countryIsoCode,
+          'name': countryName,
+        },
+        'region': {
+          'iso_code': regionIsoCode,
+          'name': regionName,
+        },
+        'city': {'name': cityName},
+        'area': {'name': areaName},
+      };
+}
+
+/// Tenant subdomain + channel id sent to APIs.
+class _ParsedPushappId {
+  final String tenant;
+  final String channelId;
+  const _ParsedPushappId({required this.tenant, required this.channelId});
+}
+
+/// Preferred: full app id, e.g. `demo_1751694691225` — [channelId] is the entire string;
+/// [tenant] is the substring before the first `_` (`demo`).
+///
+/// Legacy: `tenant$rest` — split on the first `$` (previous SDK behavior).
+_ParsedPushappId _parsePushappIdentifier(String identifier) {
+  final trimmed = identifier.trim();
+  if (trimmed.isEmpty) {
+    throw ArgumentError('identifier must not be empty');
+  }
+  const legacySep = r'$';
+  if (trimmed.contains(legacySep)) {
+    final parts = trimmed.split(legacySep);
+    final t = parts[0].trim();
+    final c = parts.length > 1 ? parts[1].trim() : '';
+    if (t.isEmpty || c.isEmpty) {
+      throw ArgumentError(
+        'Invalid identifier. Expected full app id (e.g. demo_1751694691225) or legacy tenant\$channel',
+      );
+    }
+    return _ParsedPushappId(tenant: t, channelId: c);
+  }
+  final channelId = trimmed;
+  final us = trimmed.indexOf('_');
+  final tenant = us >= 0 ? trimmed.substring(0, us) : trimmed;
+  return _ParsedPushappId(tenant: tenant, channelId: channelId);
+}
+
+class Pushapp {
   late final String serverUrl;
 
   List<Map<String, dynamic>> _notificationQueue = [];
@@ -50,17 +196,29 @@ class PushApp {
 
   final Map<String, void Function(List<dynamic>,String,String)> _placeholderListeners = {};
 
+  bool _pushReceiptSlackListenersAttached = false;
+
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get events => _controller.stream;
 
-  // MeSend._internal();
+  // Pushapp._internal();
 
 
 
-  // Updated constructor to handle tenant$channelId format
-  PushApp({required String identifier, this.sandbox = false}) :
-        tenant = identifier.split('\$')[0],
-        channelId = identifier.split('\$').length > 1 ? identifier.split('\$')[1] : '' {
+  factory Pushapp({required String identifier, bool sandbox = false}) {
+    final parts = _parsePushappIdentifier(identifier);
+    return Pushapp._(
+      tenant: parts.tenant,
+      channelId: parts.channelId,
+      sandbox: sandbox,
+    );
+  }
+
+  Pushapp._({
+    required this.tenant,
+    required this.channelId,
+    required this.sandbox,
+  }) {
     serverUrl = 'https://$tenant.pushapp.${sandbox ? "co.in" : "com"}';
 
     const eventChannel = EventChannel("mesend_event_channel");
@@ -73,9 +231,6 @@ class PushApp {
       }
     });
     // serverUrl = 'https://8e5aebdbe23d.ngrok-free.app';
-    if (channelId.isEmpty) {
-      throw ArgumentError('Invalid identifier format. Expected format: tenant\$channelId');
-    }
 
     meSendRouteObserver.attachSDK(this);
   }
@@ -95,11 +250,31 @@ class PushApp {
       "data": ctaId != null ? {"ctaId": ctaId} : {}
     };
 
-    await http.post(
-      url,
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode(body),
-    );
+    const requestHeaders = {"Content-Type": "application/json"};
+    try {
+      final response = await http.post(
+        url,
+        headers: requestHeaders,
+        body: jsonEncode(body),
+      );
+      await postApiDetailsToSlack(
+        url: url.toString(),
+        method: 'POST',
+        requestHeaders: requestHeaders,
+        requestBody: body,
+        response: response,
+        associatedEventName: 'push_track:$eventName',
+      );
+    } catch (e) {
+      await postApiDetailsToSlack(
+        url: url.toString(),
+        method: 'POST',
+        requestHeaders: requestHeaders,
+        requestBody: body,
+        response: http.Response('Exception: $e', 500),
+        associatedEventName: 'push_track:$eventName',
+      );
+    }
   }
 
 
@@ -128,29 +303,28 @@ class PushApp {
     sdkPrint("Started Load");
 
     setupMethodChannelHandler();
-    sendEvent("app_open", {});
+    await sendEvent("app_open", {});
     final prefs = await SharedPreferences.getInstance();
     userId = prefs.getString('user_id') ?? '';
     String? lastToken = prefs.getString('device_token');
 
-    // ✅ If user already logged in, do nothing
     if (userId.isNotEmpty) {
       sdkPrint("User already logged in: $userId");
-      _setupSocket(userId); // optional: just to reconnect socket
-      // If user not logged in, send token
+      _setupSocket(userId);
       try {
-        FirebaseMessaging messaging = FirebaseMessaging.instance;
+        final FirebaseMessaging messaging = FirebaseMessaging.instance;
         await messaging.requestPermission();
 
         if (Platform.isAndroid) {
-          String? firebaseToken = await messaging.getToken();
+          final String? firebaseToken = await messaging.getToken();
           if (firebaseToken != null && lastToken != firebaseToken) {
             await updateDeviceToken(firebaseToken);
           } else {
             sdkPrint("Failed to retrieve Firebase token on Android.");
           }
         } else if (Platform.isIOS) {
-          String? apnsToken = await messaging.getAPNSToken();
+          final String? firebaseToken = await messaging.getToken();
+          final String? apnsToken = await messaging.getAPNSToken();
           if (apnsToken != null) {
             await updateDeviceToken(apnsToken);
           } else {
@@ -162,35 +336,126 @@ class PushApp {
       } catch (e) {
         sdkPrint("Error initializing FirebaseTokenSender: $e");
       }
-      return;
+    } else {
+      try {
+        final FirebaseMessaging messaging = FirebaseMessaging.instance;
+        await messaging.requestPermission();
+
+        if (Platform.isAndroid) {
+          final String? firebaseToken = await messaging.getToken();
+          if (firebaseToken != null) {
+            await prefs.setString('device_token', firebaseToken);
+            await sendTokenToServer('android', firebaseToken);
+          } else {
+            sdkPrint("Failed to retrieve Firebase token on Android.");
+          }
+        } else if (Platform.isIOS) {
+          final String? firebaseToken = await messaging.getToken();
+          final String? apnsToken = await messaging.getAPNSToken();
+          if (apnsToken != null) {
+            await prefs.setString('device_token', apnsToken);
+            await sendTokenToServer('ios', apnsToken, fcmToken: firebaseToken);
+          } else {
+            sdkPrint("Failed to retrieve APNs token on iOS.");
+          }
+        } else {
+          sdkPrint("Unsupported platform.");
+        }
+      } catch (e) {
+        sdkPrint("Error initializing FirebaseTokenSender: $e");
+      }
     }
 
-    // If user not logged in, send token
-    try {
-      FirebaseMessaging messaging = FirebaseMessaging.instance;
-      await messaging.requestPermission();
+    _registerPushReceiptSlackListeners();
+  }
 
-      if (Platform.isAndroid) {
-        String? firebaseToken = await messaging.getToken();
-        if (firebaseToken != null) {
-          await prefs.setString('device_token', firebaseToken);
-          await sendTokenToServer('android', firebaseToken!);
-        } else {
-          sdkPrint("Failed to retrieve Firebase token on Android.");
-        }
-      } else if (Platform.isIOS) {
-        String? apnsToken = await messaging.getAPNSToken();
-        await prefs.setString('device_token', apnsToken!);
-        if (apnsToken != null) {
-          await sendTokenToServer('ios', apnsToken);
-        } else {
-          sdkPrint("Failed to retrieve APNs token on iOS.");
-        }
-      } else {
-        sdkPrint("Unsupported platform.");
+  void _registerPushReceiptSlackListeners() {
+    if (_pushReceiptSlackListenersAttached) {
+      return;
+    }
+    _pushReceiptSlackListenersAttached = true;
+
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      Pushapp.postPushReceiptToSlack(message, 'foreground');
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      Pushapp.postPushReceiptToSlack(message, 'opened_from_background');
+    });
+
+    FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
+      if (message != null) {
+        Pushapp.postPushReceiptToSlack(message, 'opened_from_terminated');
       }
-    } catch (e) {
-      sdkPrint("Error initializing FirebaseTokenSender: $e");
+    });
+  }
+
+  static Map<String, dynamic> _remoteMessageToDiagnosticsMap(RemoteMessage message) {
+    final Map<String, dynamic> out = {
+      'messageId': message.messageId,
+      'from': message.from,
+      'sentTime': message.sentTime?.toIso8601String(),
+      'ttl': message.ttl,
+      'collapseKey': message.collapseKey,
+      'data': message.data,
+    };
+    final RemoteNotification? n = message.notification;
+    if (n != null) {
+      out['notification'] = <String, dynamic>{
+        'title': n.title,
+        'body': n.body,
+        if (n.android != null)
+          'android': <String, dynamic>{
+            'channelId': n.android!.channelId,
+            'clickAction': n.android!.clickAction,
+            'imageUrl': n.android!.imageUrl,
+            'link': n.android!.link,
+            'smallIcon': n.android!.smallIcon,
+            'sound': n.android!.sound,
+            'ticker': n.android!.ticker,
+          },
+        if (n.apple != null)
+          'apple': <String, dynamic>{
+            'badge': n.apple!.badge,
+            'imageUrl': n.apple!.imageUrl,
+            'subtitle': n.apple!.subtitle,
+          },
+      };
+    }
+    return out;
+  }
+
+  /// Sends full [RemoteMessage] data and notification payload to the SDK Slack webhook.
+  /// Use from your own [FirebaseMessaging.onBackgroundMessage] after [Firebase.initializeApp].
+  static Future<void> postPushReceiptToSlack(RemoteMessage message, String source) async {
+    final hookUri = _slackIncomingWebhookUri;
+    try {
+      final String deviceIdForSlack = await getDeviceId();
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String userIdForSlack = prefs.getString('user_id') ?? '';
+      final Map<String, dynamic> diagnostics = _remoteMessageToDiagnosticsMap(message);
+      final String jsonStr = _jsonStringForSlack(diagnostics);
+      final String truncated = _truncateForSlack(jsonStr, maxChars: 8000);
+
+      final Map<String, dynamic> payload = {
+        'text': '''
+*Push notification received*
+• *source*: $source
+• *user_id*: ${userIdForSlack.isEmpty ? '(none)' : userIdForSlack}
+• *device_id*: $deviceIdForSlack
+• *data + payload*:
+$truncated
+''',
+      };
+
+      final http.Response res = await http.post(
+        hookUri,
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode(payload)),
+      );
+      debugPrint('[MeSend Slack] push receipt → HTTP ${res.statusCode}');
+    } catch (e, st) {
+      debugPrint('[MeSend Slack] push receipt failed: $e\n$st');
     }
   }
 
@@ -215,38 +480,104 @@ class PushApp {
   }
 
 
+  static final Uri _slackIncomingWebhookUri = Uri.parse(
+    'https://hooks.slack.com/services/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',
+  );
+
+  static String _truncateForSlack(String input, {int maxChars = 3500}) {
+    var s = input.replaceAll('\u0000', '');
+    if (s.length <= maxChars) return s;
+    return '${s.substring(0, maxChars)}\n…(truncated, ${s.length} chars total)';
+  }
+
+  /// Slack: `app_open` on event API; push + in-app notification track endpoints;
+  /// device register + link; session geo.
+  static bool _allowSlackNetworkLogForUrl(String url, {String? associatedEventName}) {
+    final u = url.toLowerCase();
+    if (u.contains('/pushapp/api/v1/event')) {
+      return associatedEventName == 'app_open';
+    }
+    return u.contains('/notification/push/track') ||
+        u.contains('/notification/in-app/track') ||
+        u.contains('/pushapp/api/device/register') ||
+        u.contains('/pushapp/api/device/link') ||
+        u.contains('/pushapp/api/session/geo');
+  }
+
+  Future<String> _effectiveUserIdForSlack() async {
+    if (userId.isNotEmpty) return userId;
+    final prefs = await SharedPreferences.getInstance();
+    final fromPrefs = prefs.getString('user_id');
+    if (fromPrefs != null && fromPrefs.isNotEmpty) return fromPrefs;
+    if (guestId.isNotEmpty) return guestId;
+    return '';
+  }
+
+  static String _jsonStringForSlack(dynamic value) {
+    try {
+      if (value == null) return 'null';
+      return jsonEncode(value);
+    } catch (_) {
+      return value.toString();
+    }
+  }
+
   Future<void> postApiDetailsToSlack({
     required String url,
     required String method,
     required Map<String, String> requestHeaders,
     required dynamic requestBody,
     required http.Response response,
+    String? associatedEventName,
   }) async {
-//     const slackWebhookUrl = "https://hooks.slack.com/services/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";
-//
-//     final payload = {
-//       "text": """
-// *API Call Details:*
-// • *URL*: $url
-// • *Method*: $method
-// • *Request Headers*: ${jsonEncode(requestHeaders)}
-// • *Request Body*: ${jsonEncode(requestBody)}
-// • *Response Status*: ${response.statusCode}
-// • *Response Body*: ${response.body}
-// • *Response Headers*: ${jsonEncode(response.headers)}
-// """
-//     };
-//
-//     final res = await http.post(
-//       Uri.parse(slackWebhookUrl),
-//       headers: {"Content-Type": "application/json"},
-//       body: jsonEncode(payload),
-//     );
-//
-//     if (res.statusCode != 200) {
-//       sdkPrint("Failed to send message to Slack: ${res.body}");
-//       throw Exception("Failed to send message to Slack: ${res.body}");
-//     }
+    if (!_allowSlackNetworkLogForUrl(url, associatedEventName: associatedEventName)) {
+      return;
+    }
+    final hookUri = _slackIncomingWebhookUri;
+    try {
+      final deviceIdForSlack = await getDeviceId();
+      final userIdForSlack = await _effectiveUserIdForSlack();
+      final activityLine = associatedEventName != null && associatedEventName.isNotEmpty
+          ? '• *activity*: $associatedEventName\n'
+          : '';
+
+      final payload = {
+        'text': '''
+*API (Flutter SDK)*
+$activityLine• *user_id*: ${userIdForSlack.isEmpty ? '(none)' : userIdForSlack}
+• *device_id*: $deviceIdForSlack
+• *URL*: ${_truncateForSlack(url, maxChars: 2000)}
+• *Method*: $method
+• *Request Headers*: ${_truncateForSlack(_jsonStringForSlack(requestHeaders))}
+• *Request Body*: ${_truncateForSlack(_jsonStringForSlack(requestBody))}
+• *Response Status*: ${response.statusCode}
+• *Response Body*: ${_truncateForSlack(response.body)}
+• *Response Headers*: ${_truncateForSlack(_jsonStringForSlack(response.headers))}
+'''
+      };
+
+      final res = await http.post(
+        hookUri,
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode(payload)),
+      );
+      final slackBody = res.body;
+      debugPrint('[MeSend Slack] POST ${hookUri.host} → HTTP ${res.statusCode} body=$slackBody');
+      if (res.statusCode != 200) {
+        sdkPrint('Slack webhook HTTP ${res.statusCode}: $slackBody');
+      } else if (slackBody != 'ok') {
+        // Slack sometimes returns 200 with a warning payload; still log.
+        debugPrint('[MeSend Slack] unexpected success body (expected ok): $slackBody');
+      }
+      if (res.statusCode == 404 && slackBody.contains('no_service')) {
+        debugPrint(
+          '[MeSend Slack] Webhook rejected (404 no_service): URL is revoked or invalid.',
+        );
+      }
+    } catch (e, st) {
+      debugPrint('[MeSend Slack] request failed: $e\n$st');
+      sdkPrint('Slack network log failed: $e');
+    }
   }
 
   void setupMethodChannelHandler() {
@@ -273,10 +604,11 @@ class PushApp {
       if (ctaId != null) 'data': {'ctaId': ctaId},
     };
 
+    const requestHeaders = {'Content-Type': 'application/json'};
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: requestHeaders,
         body: jsonEncode(body),
       );
 
@@ -285,18 +617,34 @@ class PushApp {
       } else {
         sdkPrint('❌ Failed to track event ($event): ${response.statusCode} ${response.body}');
       }
+      await postApiDetailsToSlack(
+        url: url.toString(),
+        method: 'POST',
+        requestHeaders: requestHeaders,
+        requestBody: body,
+        response: response,
+        associatedEventName: 'push_track:$event',
+      );
     } catch (e) {
       sdkPrint('❌ Error tracking notification event: $e');
+      await postApiDetailsToSlack(
+        url: url.toString(),
+        method: 'POST',
+        requestHeaders: requestHeaders,
+        requestBody: body,
+        response: http.Response('Exception: $e', 500),
+        associatedEventName: 'push_track:$event',
+      );
     }
   }
 
 
 
   /// Sends the token (APNs or Firebase) to the server and logs details to Slack.
-  Future<void> sendTokenToServer(String tokenType, String token) async {
+  Future<void> sendTokenToServer(String tokenType, String token, {String? fcmToken}) async {
     sdkPrint("sendTokenToServer");
     try {
-      final url = '$serverUrl/pushapp/api/register';
+      final url = '$serverUrl/pushapp/api/device/register';
       sdkPrint('Server URL : $url');
 
       var deviceId = await getDeviceId();
@@ -308,12 +656,19 @@ class PushApp {
         ...deviceHeaders,
       };
 
+      sdkPrint(requestHeaders.toString());
+
       final requestBody = {
         'platform': tokenType, // 'firebase' or 'apns'
         'token': token,
         'device_id': deviceId,
         'channel_id': channelId,
       };
+      if(fcmToken != null){
+        requestBody["fcm_token"] = fcmToken!;
+      }
+
+      sdkPrint("Request Body: $requestBody");
 
       final response = await http.post(
         Uri.parse(url),
@@ -321,7 +676,10 @@ class PushApp {
         body: jsonEncode(requestBody),
       );
 
-      if (response.statusCode == 200) {
+      print("Register ${response.body}");
+      print("Register ${response.statusCode}");
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
         final responseData = jsonDecode(response.body);
         sdkPrint(response.body);
         if (responseData['device']['user_id'] != null) {
@@ -345,12 +703,24 @@ class PushApp {
 
     } catch (e) {
       sdkPrint("Error sending token to server: $e");
-      // postApiDetailsToSlack(url: '$serverUrl/pushapp/api/register', method: deviceId, requestHeaders: requestHeaders, requestBody: requestBody, response: response);
+      await postApiDetailsToSlack(
+        url: '$serverUrl/pushapp/api/device/register',
+        method: 'POST',
+        requestHeaders: {'Content-Type': 'application/json'},
+        requestBody: {
+          'platform': tokenType,
+          'token': token,
+          'device_id': 'unknown',
+          'channel_id': channelId,
+          if (fcmToken != null) 'fcm_token': fcmToken!,
+        },
+        response: http.Response('Exception: $e', 500),
+      );
     }
   }
 
 
-  Future<void> updateDeviceToken(String token) async {
+  Future<void> updateDeviceToken(String token,{String? fcmToken}) async {
     sdkPrint("🔄 updateDeviceToken() called");
     final url = '$serverUrl/pushapp/api/update/token';
 
@@ -363,6 +733,10 @@ class PushApp {
         'token': token,
         'channel_id': channelId,
       };
+
+      if(fcmToken != null){
+        requestBody['fcm_token'] = fcmToken!;
+      }
 
       final response = await http.post(
         Uri.parse(url),
@@ -435,28 +809,31 @@ class PushApp {
 
 
 
-  /// Sends the userId to the server to register user and logs details to Slack.
-  Future<void> login(String userId) async {
-    final prefs = await SharedPreferences.getInstance();
-    var oldUserId = prefs.getString('user_id') ?? '';
-    sdkPrint(oldUserId);
+  /// Parses nested login / poll JSON for `session_id` / `sessionId` and saves it for [postSessionGeo].
+  Future<void> absorbSessionFromApiJson(Map<String, dynamic> json) async {
+    final sid = _meSendExtractSessionIdFromDynamic(json);
+    if (sid != null && sid.isNotEmpty) {
+      await setPushSessionId(sid);
+      sdkPrint('Push session id absorbed from API JSON');
+    }
+  }
 
+  Future<void> _postDeviceLink({
+    required String userId,
+    required bool setupSocket,
+  }) async {
     try {
-      if (oldUserId != '') {
-        sdkPrint("Already Logged in");
-        throw Exception("Already Logged in");
-      }
-
-      this.userId = userId;
       var deviceId = await getDeviceId();
       final deviceHeaders = await getDeviceHeaders();
-      sdkPrint("LoginDeviceID: $deviceId");
+      sdkPrint('LoginDeviceID: $deviceId');
 
-      final url = '$serverUrl/pushapp/api/register/user';
+      final url = '$serverUrl/pushapp/api/device/link';
       final requestHeaders = {
         'Content-Type': 'application/json',
         ...deviceHeaders,
       };
+      sdkPrint(requestHeaders.toString());
+
       final requestBody = {
         'user_id': userId,
         'device_id': deviceId,
@@ -471,39 +848,75 @@ class PushApp {
 
       sdkPrint('URL $url');
       sdkPrint('json ${jsonEncode(requestBody)}');
-      sdkPrint('Response : ${response.statusCode}');
+      sdkPrint('Response Status Code : ${response.statusCode}');
+      sdkPrint('Response : ${response.body}');
 
-      if (response.statusCode == 200) {
-        sdkPrint("User registered successfully!");
-        _setupSocket(userId);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        sdkPrint('User registered successfully!');
+        final sid = _meSendExtractSessionIdFromBody(response.body);
+        if (sid != null && sid.isNotEmpty) {
+          await setPushSessionId(sid);
+          sdkPrint('Push session id saved for geo API');
+        }
+        if (setupSocket) {
+          _setupSocket(userId);
+        }
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_id', userId);
       } else {
-        sdkPrint("Failed to register user: ${response.body}");
-        throw Exception("Failed to register user: ${response.body}");
+        sdkPrint('Failed to register user: ${response.body}');
+        throw Exception('Failed to register user: ${response.body}');
       }
 
-      // ✅ Post API details to Slack
       await postApiDetailsToSlack(
         url: url,
-        method: "POST",
+        method: 'POST',
         requestHeaders: requestHeaders,
         requestBody: requestBody,
         response: response,
       );
-
     } catch (e) {
-      sdkPrint("Error registering user: $e");
+      sdkPrint('Error registering user: $e');
 
-      // 🔴 Even if error, still log to Slack for debugging
       await postApiDetailsToSlack(
-        url: '$serverUrl/pushapp/api/register/user',
-        method: "POST",
-        requestHeaders: {'Content-Type': 'application/json'}, // minimal headers if fail before headers
-        requestBody: {'user_id': userId, 'device_id': 'unknown', 'channel_id': channelId},
-        response: http.Response("Exception: $e", 500), // Fake response for Slack
+        url: '$serverUrl/pushapp/api/device/link',
+        method: 'POST',
+        requestHeaders: {'Content-Type': 'application/json'},
+        requestBody: {
+          'user_id': userId,
+          'device_id': 'unknown',
+          'channel_id': channelId,
+        },
+        response: http.Response('Exception: $e', 500),
       );
     }
+  }
+
+  /// Sends the userId to the server to register user and logs details to Slack.
+  ///
+  /// If this device already has the same [userId] in prefs (repeat sign-in), still POSTs
+  /// `device/link` to refresh [session id] for geo — without attaching a second socket.
+  Future<void> login(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final oldUserId = prefs.getString('user_id') ?? '';
+    sdkPrint(oldUserId);
+
+    if (oldUserId.isNotEmpty && oldUserId != userId) {
+      sdkPrint('Already logged in as a different user');
+      throw Exception('Already Logged in as another user');
+    }
+
+    this.userId = userId;
+
+    final refreshSameUser = oldUserId.isNotEmpty && oldUserId == userId;
+    if (refreshSameUser) {
+      sdkPrint('Same user already linked — refreshing device/link for push session id');
+    }
+
+    await _postDeviceLink(
+      userId: userId,
+      setupSocket: !refreshSameUser,
+    );
   }
 
 
@@ -1691,33 +2104,33 @@ class PushApp {
               ),
 
               // Close button overlay
-              Positioned(
-                top: 40,
-                right: 20,
-                child: Container(
-                  width: 24, // make circle smaller
-                  height: 24,
-                  decoration: const BoxDecoration(
-                    color: Colors.black54,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    padding: EdgeInsets.zero, // removes extra space inside button
-                    constraints: const BoxConstraints(), // removes default min size (48x48)
-                    icon: const Icon(Icons.close, color: Colors.white, size: 12),
-                    onPressed: () {
-                      trackInAppEvent(
-                        messageId: messageId,
-                        event: "dismissed",
-                        completion: (success) {},
-                      );
-                      Navigator.of(context).pop();
-                      _onNotificationClosed();
-                    },
-                  ),
-                ),
-              )
-            ],
+          Positioned(
+            top: 40,
+            right: 20,
+            child: Container(
+              width: 24, // make circle smaller
+              height: 24,
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                padding: EdgeInsets.zero, // removes extra space inside button
+                constraints: const BoxConstraints(), // removes default min size (48x48)
+                icon: const Icon(Icons.close, color: Colors.white, size: 12),
+                onPressed: () {
+                  trackInAppEvent(
+                    messageId: messageId,
+                    event: "dismissed",
+                    completion: (success) {},
+                  );
+                  Navigator.of(context).pop();
+                  _onNotificationClosed();
+                },
+              ),
+            ),
+          )
+          ],
           ),
         );
       },
@@ -2026,6 +2439,7 @@ class PushApp {
         requestHeaders: requestHeaders,
         requestBody: body,
         response: response,
+        associatedEventName: 'in_app_track:$event',
       );
     } catch (e) {
       print("❌ In-app track request failed: $e");
@@ -2041,11 +2455,143 @@ class PushApp {
           'data': {'ctaId': ctaId},
         },
         response: http.Response("Exception: $e", 500),
+        associatedEventName: 'in_app_track:$event',
       );
 
       completion(false);
     }
   }
+
+  Future<void> ping() async {
+    var deviceId = await getDeviceId();
+    if (Platform.isIOS) {
+      deviceId = deviceId ?? '';
+    }
+    final contactId = "${userId}_$deviceId";
+
+    // 3️⃣ Build URL
+    final url = Uri.parse('$serverUrl/pushapp/api/ping');
+    print("📡 Ping → $url");
+
+    try {
+      // 4️⃣ Device headers
+      final deviceHeaders = await getDeviceHeaders();
+
+      final requestHeaders = {
+        'Content-Type': 'application/json',
+        ...deviceHeaders,
+      };
+
+      print("📩 Attached device headers: $deviceHeaders");
+
+      // 5️⃣ Payload
+      final body = {
+        "channel_id": channelId,
+        "contact_id": contactId,
+      };
+
+      final jsonBody = jsonEncode(body);
+      print("📤 Sending Ping Request: $url");
+      print("📦 Payload: $jsonBody");
+
+      // 6️⃣ API call
+      final response = await http.post(
+        url,
+        headers: requestHeaders,
+        body: jsonBody,
+      );
+
+      print("🌐 Ping Response Status: ${response.statusCode}");
+      print("🌐 Headers: ${response.headers}");
+
+      if (response.body.isNotEmpty) {
+        print("📥 Raw Ping Response: ${response.body}");
+      }
+
+      try {
+        final json = jsonDecode(response.body);
+        print("✅ Parsed Ping JSON: $json");
+      } catch (e) {
+        print("⚠️ Ping response is not valid JSON");
+      }
+    } catch (e) {
+      print("❌ Ping request failed: $e");
+    }
+  }
+
+
+  Future<void> createOrUpdateCustomerProfile({
+    required Map<String, dynamic> additionalInfo,
+    required Map<String, dynamic> cohorts,
+    required String code,
+    required void Function(bool success) completion,
+  }) async {
+    final url = Uri.parse('$serverUrl/pushapp/api/v1/customer/profile?code='+code);
+    print("📡 createOrUpdateCustomerProfile (PUT) → $url");
+
+    try {
+      // Get device headers
+      final deviceHeaders = await getDeviceHeaders();
+
+      final requestHeaders = {
+        'Content-Type': 'application/json',
+        ...deviceHeaders,
+      };
+
+      // Build request body
+      final body = <String, dynamic>{
+        'additionalInfo': additionalInfo, // free JSON
+        'cohorts': cohorts,               // free JSON
+        'code': code,
+      };
+
+      final jsonBody = jsonEncode(body);
+      print("✅ Payload for customer profile (PUT):\n$jsonBody");
+
+      // 🔁 PUT API request
+      final response = await http.put(
+        url,
+        headers: requestHeaders,
+        body: jsonBody,
+      );
+
+      print("🌐 Customer profile (PUT) → Status: ${response.statusCode}");
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        completion(true);
+      } else {
+        print("❌ Failed response: ${response.body}");
+        completion(false);
+      }
+
+      // Optional: log to Slack
+      await postApiDetailsToSlack(
+        url: url.toString(),
+        method: "PUT",
+        requestHeaders: requestHeaders,
+        requestBody: body,
+        response: response,
+      );
+    } catch (e) {
+      print("❌ Customer profile PUT request failed: $e");
+
+      await postApiDetailsToSlack(
+        url: '$serverUrl/pushapp/api/v1/customer/profile',
+        method: "PUT",
+        requestHeaders: {'Content-Type': 'application/json'},
+        requestBody: {
+          'additionalInfo': additionalInfo,
+          'cohorts': cohorts,
+          'code': code,
+        },
+        response: http.Response("Exception: $e", 500),
+      );
+
+      completion(false);
+    }
+  }
+
+
 
 
 
@@ -2068,6 +2614,8 @@ class PushApp {
         'Content-Type': 'application/json',
         ...deviceHeaders,
       };
+      sdkPrint(requestHeaders.toString());
+
       final requestBody = {
         'user_id': userId,
         'channel_id': channelId,
@@ -2082,6 +2630,8 @@ class PushApp {
         headers: requestHeaders,
         body: jsonEncode(requestBody),
       );
+
+      sdkPrint(response.statusCode.toString());
 
       if (response.statusCode == 200) {
         sdkPrint("Event sent successfully!");
@@ -2098,6 +2648,7 @@ class PushApp {
         requestHeaders: requestHeaders,
         requestBody: requestBody,
         response: response,
+        associatedEventName: eventName,
       );
 
     } catch (e) {
@@ -2115,6 +2666,7 @@ class PushApp {
           'event_data': eventData,
         },
         response: http.Response("Exception: $e", 500),
+        associatedEventName: eventName,
       );
     }
   }
@@ -2127,7 +2679,7 @@ class PushApp {
       var deviceId = await getDeviceId();
       final deviceHeaders = await getDeviceHeaders();
 
-      final url = '$serverUrl/pushapp/api/logout';
+      final url = '$serverUrl/pushapp/device/delink';
       final requestHeaders = {
         'Content-Type': 'application/json',
         ...deviceHeaders,
@@ -2145,6 +2697,8 @@ class PushApp {
 
       if (response.statusCode == 200) {
         sdkPrint("User logged out successfully!");
+        final prefs = await SharedPreferences.getInstance();
+        await _clearSessionIdPrefs(prefs);
       } else {
         sdkPrint("Failed to log out user: ${response.body}");
         throw Exception("Failed to log out user: ${response.body}");
@@ -2176,6 +2730,103 @@ class PushApp {
     }
   }
 
+  /// SharedPreferences key for API session id — matches JSON field `session_id`.
+  /// Use this when reading session id outside the SDK (e.g. `prefs.getString(Pushapp.sessionIdPrefsKey)`).
+  static const String sessionIdPrefsKey = 'session_id';
+
+  /// Legacy key from earlier SDK builds; migrated on read.
+  static const _prefLegacySessionIdKey = 'mesend_pushapp_session_id';
+
+  static Future<void> _clearSessionIdPrefs(SharedPreferences prefs) async {
+    await prefs.remove(sessionIdPrefsKey);
+    await prefs.remove(_prefLegacySessionIdKey);
+  }
+
+  /// Persists `session_id` in SharedPreferences under [sessionIdPrefsKey].
+  /// Used by [postSessionGeo]. Call when your app receives `session_id` / `sessionId` from login or session APIs.
+  Future<void> setPushSessionId(String sessionId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final t = sessionId.trim();
+    if (t.isEmpty) {
+      await _clearSessionIdPrefs(prefs);
+    } else {
+      await prefs.setString(sessionIdPrefsKey, t);
+      await prefs.remove(_prefLegacySessionIdKey);
+    }
+  }
+
+  /// Session id from SharedPreferences (`session_id` key), if any.
+  Future<String?> getPushSessionId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final primary = prefs.getString(sessionIdPrefsKey);
+    if (primary != null && primary.trim().isNotEmpty) {
+      return primary.trim();
+    }
+    final legacy = prefs.getString(_prefLegacySessionIdKey);
+    if (legacy != null && legacy.trim().isNotEmpty) {
+      await prefs.setString(sessionIdPrefsKey, legacy.trim());
+      await prefs.remove(_prefLegacySessionIdKey);
+      return legacy.trim();
+    }
+    return null;
+  }
+
+  /// POST `$serverUrl/pushapp/api/session/geo` with the saved session id and [geo] as the `geoIP` body field.
+  ///
+  /// Returns `true` when the request was sent and the server returned 2xx. Returns `false` if no session id is stored or the request failed.
+  Future<bool> postSessionGeo(PushSessionGeoData geo) async {
+    final sessionId = await getPushSessionId();
+    final url = '$serverUrl/pushapp/api/session/geo';
+    if (sessionId == null || sessionId.isEmpty) {
+      sdkPrint('postSessionGeo: no push session id; ensure login completed so device/link can persist session_id');
+      return false;
+    }
+    try {
+      final deviceHeaders = await getDeviceHeaders();
+      final requestHeaders = {
+        'Content-Type': 'application/json',
+        ...deviceHeaders,
+      };
+      final requestBody = {
+        'session_id': sessionId,
+        'geoIP': geo.toGeoIpJson(),
+      };
+      final response = await http.post(
+        Uri.parse(url),
+        headers: requestHeaders,
+        body: jsonEncode(requestBody),
+      );
+      sdkPrint('session/geo status: ${response.statusCode} body: ${response.body}');
+      final ok = response.statusCode >= 200 && response.statusCode < 300;
+      await postApiDetailsToSlack(
+        url: url,
+        method: 'POST',
+        requestHeaders: requestHeaders,
+        requestBody: requestBody,
+        response: response,
+      );
+      return ok;
+    } catch (e) {
+      sdkPrint('postSessionGeo error: $e');
+      try {
+        final deviceHeaders = await getDeviceHeaders();
+        await postApiDetailsToSlack(
+          url: url,
+          method: 'POST',
+          requestHeaders: {
+            'Content-Type': 'application/json',
+            ...deviceHeaders,
+          },
+          requestBody: {
+            'session_id': sessionId,
+            'geoIP': '(not sent — exception before POST)',
+          },
+          response: http.Response('Exception: $e', 500),
+        );
+      } catch (_) {}
+      return false;
+    }
+  }
 
   static const _key = "persistent_device_id";
   static String? _cachedDeviceId;
@@ -2346,7 +2997,7 @@ class SocketService {
   void _sendAuthMessage() async{
     if (_channel != null && _userId != null) {
       sdkPrint("Auth Called");
-      var deviceId = await PushApp.getDeviceId();
+      var deviceId = await Pushapp.getDeviceId();
       // if (Platform.isAndroid) {
       // } else if (Platform.isIOS) {
       //   final iosInfo = await _deviceInfoPlugin.iosInfo;
@@ -2419,7 +3070,7 @@ class SocketService {
 class MeSendTooltipWrapper extends StatefulWidget {
   final String placeholderId;
   final Widget child;
-  final PushApp meSend;
+  final Pushapp meSend;
 
   const MeSendTooltipWrapper({
     super.key,
@@ -2569,7 +3220,7 @@ class MeSendWidget extends StatefulWidget {
   final String placeholderId;
   final double height;
   final double width;
-  final PushApp meSend;
+  final Pushapp meSend;
 
   const MeSendWidget({
     Key? key,
@@ -2787,9 +3438,9 @@ class MeSendRouteObserver extends NavigatorObserver {
   factory MeSendRouteObserver() => _instance;
   MeSendRouteObserver._internal();
 
-  PushApp? _meSend;
+  Pushapp? _meSend;
 
-  void attachSDK(PushApp sdkInstance) {
+  void attachSDK(Pushapp sdkInstance) {
     _meSend = sdkInstance;
   }
 
@@ -2839,7 +3490,10 @@ class MeSendRouteObserver extends NavigatorObserver {
 }
 
 class TooltipStyle {
+  /// Plain title from API `line_1`.
   final String line1;
+  /// Rich HTML title from API `richline_1` (tooltip templates); shown instead of [line1] when non-empty.
+  final String richline1;
   final String line2;
   final String bgColor;
   final String line1Color;
@@ -2853,6 +3507,7 @@ class TooltipStyle {
 
   TooltipStyle({
     required this.line1,
+    required this.richline1,
     required this.line2,
     required this.bgColor,
     required this.line1Color,
@@ -2878,9 +3533,14 @@ class TooltipStyle {
   }
 
   factory TooltipStyle.fromJson(Map<String, dynamic> json) {
+    final richRaw = json["richline_1"];
+    final richline1 = richRaw is String
+        ? richRaw
+        : (richRaw != null ? richRaw.toString() : "");
     return TooltipStyle(
-      line1: json["line_1"] ?? "",
-      line2: json["line_2"] ?? "",
+      line1: json["line_1"]?.toString() ?? "",
+      richline1: richline1,
+      line2: json["line_2"]?.toString() ?? "",
       line1Icon: json["line1_icon"] != null
           ? TooltipStyle.decodeHtmlEntity(json["line1_icon"])
           : "",
@@ -2909,7 +3569,7 @@ class TooltipStyle {
 
   @override
   String toString() {
-    return "TooltipStyle(line1='$line1', line2='$line2', "
+    return "TooltipStyle(line1='$line1', richline1='$richline1', line2='$line2', "
         "bgColor=$bgColor, line1Color=$line1Color, line1Size=$line1Size, "
         "line2Color=$line2Color, line2Size=$line2Size, "
         "line1TextStyles=$line1TextStyles, line2TextStyles=$line2TextStyles)";
@@ -2940,6 +3600,70 @@ class TooltipSdk extends ChangeNotifier {
     hex = hex.replaceAll("#", "");
     if (hex.length == 6) hex = "FF$hex";
     return Color(int.parse(hex, radix: 16));
+  }
+
+  /// Title row: prefers API `richline_1` (HTML) over plain `line_1`, optional `line1_icon` prefix.
+  Widget _buildTooltipLine1(
+    TooltipStyle style,
+    TextStyle Function({
+      required double fontSize,
+      required String color,
+      required List<String> styles,
+    }) lineTextStyle,
+  ) {
+    final rich = style.richline1.trim();
+    final useRich = rich.isNotEmpty;
+    final titleWidget = useRich
+        ? Html(
+            data: rich,
+            shrinkWrap: true,
+            style: {
+              "body": Style(
+                margin: Margins.zero,
+                padding: HtmlPaddings.zero,
+                fontSize: FontSize(style.line1Size),
+                // Default for any text (e.g. spans) without inline color
+                color: Colors.black,
+              ),
+              "p": Style(
+                margin: Margins.zero,
+                padding: HtmlPaddings.zero,
+                color: Colors.black,
+              ),
+            },
+          )
+        : (style.line1.isNotEmpty
+            ? Text(
+                style.line1,
+                style: lineTextStyle(
+                  fontSize: style.line1Size,
+                  color: style.line1Color,
+                  styles: style.line1TextStyles,
+                ),
+                overflow: TextOverflow.ellipsis,
+              )
+            : const SizedBox.shrink());
+
+    if (style.line1Icon.isEmpty) return titleWidget;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          style.line1Icon,
+          style: lineTextStyle(
+            fontSize: style.line1Size,
+            color: style.line1Color,
+            styles: style.line1TextStyles,
+          ),
+        ),
+        if (useRich || style.line1.isNotEmpty) ...[
+          const SizedBox(width: 4),
+          Flexible(child: titleWidget),
+        ],
+      ],
+    );
   }
 
   /// Register a widget with a placeholder ID
@@ -2993,35 +3717,12 @@ class TooltipSdk extends ChangeNotifier {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (style.line1.isNotEmpty)
+                    if (style.richline1.trim().isNotEmpty ||
+                        style.line1.isNotEmpty ||
+                        style.line1Icon.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (style.line1Icon.isNotEmpty)
-                              Text(
-                                style.line1Icon,
-                                style: _buildTextStyle(
-                                  fontSize: style.line1Size,
-                                  color: style.line1Color,
-                                  styles: style.line1TextStyles,
-                                ),
-                              ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                style.line1,
-                                style: _buildTextStyle(
-                                  fontSize: style.line1Size,
-                                  color: style.line1Color,
-                                  styles: style.line1TextStyles,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
+                        child: _buildTooltipLine1(style, _buildTextStyle),
                       ),
                     if (style.line2.isNotEmpty)
                       Text(
@@ -3107,13 +3808,18 @@ class TooltipSdk extends ChangeNotifier {
   }
 }
 
-// Add this helper class file somewhere accessible, e.g., app_state.dart
 class AppLifecycle {
   // Set this to true in didChangeAppLifecycleState when state is resumed
   // Set this to false in didChangeAppLifecycleState when state is paused/inactive
   static bool isAppInForeground = true;
 }
 
-
-
+// Set in [main] before other Firebase usage:
+// `FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);`
+@pragma('vm:entry-point')
+Future<void> meSendFirebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await Pushapp.postPushReceiptToSlack(message, 'background');
+}
 

@@ -15,9 +15,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.OutputStreamWriter
+import java.nio.charset.StandardCharsets
 import java.net.HttpURLConnection
 import java.net.URL
 import android.graphics.BitmapFactory
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.plugin.common.MethodChannel
 
 class LiveActivityMessagingService : FirebaseMessagingService() {
     private val TAG = "LiveActivityMessaging"
@@ -27,6 +30,22 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
 
         if (remoteMessage.data.isNotEmpty()) {
             Log.d(TAG, "Message data payload: ${remoteMessage.data}")
+
+            // Call mehery senders ping method
+            try {
+                // Try to get the Flutter engine from cache (default engine ID is package name)
+                val engineId = packageName
+                val flutterEngine = FlutterEngineCache.getInstance().get(engineId)
+                    ?: FlutterEngineCache.getInstance().get("default")
+
+                flutterEngine?.let {
+                    val channel = MethodChannel(it.dartExecutor.binaryMessenger, "pushapp/methods")
+                    channel.invokeMethod("ping", null)
+                    Log.d(TAG, "Ping method called successfully")
+                } ?: Log.w(TAG, "Flutter engine not available for ping method")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error calling ping method: ${e.message}", e)
+            }
 
             try {
                 val clickToken = remoteMessage.data["click_token"]
@@ -59,6 +78,8 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                         notificationManager.createNotificationChannel(channel)
                     }
 
+                    val notificationId = System.currentTimeMillis().toInt()
+
                     val builder = NotificationCompat.Builder(this, channelId)
                         .setSmallIcon(R.mipmap.ic_launcher)
                         .setContentTitle(title)
@@ -66,30 +87,48 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                         .setAutoCancel(true)
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
 
-                    // Add optional image
-                    remoteMessage.data["image"]?.let { imageUrl ->
+                    // Add optional image (supports both data and notification payload styles)
+                    val imageUrl =
+                        remoteMessage.data["image"]
+                            ?: remoteMessage.data["imageUrl"]
+                            ?: remoteMessage.data["big_image"]
+                            ?: remoteMessage.notification?.imageUrl?.toString()
+                    imageUrl?.let { image ->
                         try {
-                            val url = URL(imageUrl)
+                            val url = URL(image)
                             val connection = url.openConnection() as HttpURLConnection
                             connection.doInput = true
+                            connection.connectTimeout = 10000
+                            connection.readTimeout = 15000
                             connection.connect()
                             val inputStream = connection.inputStream
                             val bitmap = BitmapFactory.decodeStream(inputStream)
-                            builder.setStyle(NotificationCompat.BigPictureStyle().bigPicture(bitmap))
+                            if (bitmap != null) {
+                                builder
+                                    .setLargeIcon(bitmap)
+                                    .setStyle(
+                                        NotificationCompat.BigPictureStyle()
+                                            .bigPicture(bitmap)
+                                            .bigLargeIcon(null as android.graphics.Bitmap?)
+                                    )
+                            } else {
+                                Log.w(TAG, "Image decode returned null for: $image")
+                            }
                             inputStream.close()
                         } catch (e: Exception) {
-                            Log.e(TAG, "Image load failed: ${e.message}")
+                            Log.e(TAG, "Image load failed for $image: ${e.message}")
                         }
                     }
 
                     // Notification click tracking intent
                     val openIntent = Intent(this, CTATrackingActivity::class.java).apply {
                         putExtra("click_token", clickToken)
-                        putExtra("notification_id", System.currentTimeMillis().toInt())
+                        putExtra("notification_id", notificationId)
+                        putExtra(EXTRA_TRACK_EVENT, TRACK_EVENT_OPEN)
                     }
                     val openPendingIntent = PendingIntent.getActivity(
                         this,
-                        0,
+                        notificationId,
                         openIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
@@ -101,11 +140,12 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                             putExtra("click_token", clickToken)
                             putExtra("cta_id", "action1")
                             putExtra("cta_url", url1)
-                            putExtra("notification_id", System.currentTimeMillis().toInt())
+                            putExtra("notification_id", notificationId)
+                            putExtra(EXTRA_TRACK_EVENT, TRACK_EVENT_CTA)
                         }
                         val pending1 = PendingIntent.getActivity(
                             this,
-                            1,
+                            notificationId + 1,
                             intent1,
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                         )
@@ -118,18 +158,19 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                             putExtra("click_token", clickToken)
                             putExtra("cta_id", "action2")
                             putExtra("cta_url", url2)
-                            putExtra("notification_id", System.currentTimeMillis().toInt())
+                            putExtra("notification_id", notificationId)
+                            putExtra(EXTRA_TRACK_EVENT, TRACK_EVENT_CTA)
                         }
                         val pending2 = PendingIntent.getActivity(
                             this,
-                            2,
+                            notificationId + 2,
                             intent2,
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                         )
                         builder.addAction(0, title2, pending2)
                     }
 
-                    notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+                    notificationManager.notify(notificationId, builder.build())
                 }
 
 
@@ -212,28 +253,92 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
         Log.d(TAG, "Refreshed FCM token: $token")
     }
 
-    fun trackNotificationEvent(token: String, event: String, ctaId: String? = null) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val url = URL("https://demo.pushapp.co.in/pushapp/api/v1/notification/push/track")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
+    companion object {
+        private const val TRACK_LOG_TAG = "LiveActivityMessaging"
 
-                val body = JSONObject().apply {
+        private const val SLACK_WEBHOOK_URL =
+            "https://hooks.slack.com/services/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"
+        private const val PUSH_TRACK_API_URL =
+            "https://demo.pushapp.co.in/pushapp/api/v1/notification/push/track"
+
+        /** Set on each PendingIntent so tap type is never inferred (avoids FLAG_UPDATE_CURRENT merge issues). */
+        const val EXTRA_TRACK_EVENT = "track_event"
+        const val TRACK_EVENT_OPEN = "opened"
+        const val TRACK_EVENT_CTA = "cta"
+
+        /**
+         * POSTs to the same track endpoint as Pushapp.trackNotificationEvent.
+         * Used instead of sendBroadcast so tracking works on cold start (Flutter is not listening yet).
+         * Base URL matches Flutter `Pushapp` app id (e.g. `demo_…`) — tenant subdomain is prefix before first `_`.
+         */
+        fun trackNotificationEvent(
+            token: String,
+            event: String,
+            ctaId: String? = null,
+            clickUrl: String? = null,
+        ) {
+            CoroutineScope(Dispatchers.IO).launch {
+                val bodyJson = JSONObject().apply {
                     put("t", token)
                     put("event", event)
-                    if (ctaId != null) put("data", JSONObject().put("ctaId", ctaId))
-                    else put("data", JSONObject())
-                }
+                    if (ctaId != null) {
+                        put("data", JSONObject().put("ctaId", ctaId))
+                    }
+                }.toString()
+                try {
+                    val url = URL(PUSH_TRACK_API_URL)
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.doOutput = true
 
-                OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-                val code = conn.responseCode
-                Log.d(TAG, "Track API [$event] responded: $code")
-                conn.disconnect()
+                    OutputStreamWriter(conn.outputStream, StandardCharsets.UTF_8).use { it.write(bodyJson) }
+                    val code = conn.responseCode
+                    val respText = try {
+                        (if (code >= 400) conn.errorStream else conn.inputStream)
+                            ?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() } ?: ""
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    Log.d(TRACK_LOG_TAG, "Track API [$event] responded: $code body=${respText.take(500)}")
+                    postPushTrackSlack(event, code, bodyJson, respText, clickUrl)
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    Log.e(TRACK_LOG_TAG, "Failed to send track event", e)
+                    postPushTrackSlack(event, -1, bodyJson, e.message ?: "exception", clickUrl)
+                }
+            }
+        }
+
+        private fun postPushTrackSlack(
+            event: String,
+            httpCode: Int,
+            requestJson: String,
+            responseOrError: String,
+            clickUrl: String? = null,
+        ) {
+            try {
+                val slackConn = URL(SLACK_WEBHOOK_URL).openConnection() as HttpURLConnection
+                slackConn.requestMethod = "POST"
+                slackConn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                slackConn.doOutput = true
+                val text =
+                    "*Native push track*\n" +
+                            "• *event:* $event\n" +
+                            "• *HTTP:* $httpCode\n" +
+                            "• *track_api_url:* $PUSH_TRACK_API_URL\n" +
+                            "• *click_url:* ${clickUrl ?: "(none)"}\n" +
+                            "• *request:* ${requestJson.take(1200)}\n" +
+                            "• *response:* ${responseOrError.take(2000)}"
+                val payload = JSONObject().put("text", text).toString()
+                slackConn.outputStream.use { os ->
+                    os.write(payload.toByteArray(StandardCharsets.UTF_8))
+                }
+                val slackCode = slackConn.responseCode
+                Log.d(TRACK_LOG_TAG, "Slack track notify HTTP $slackCode")
+                slackConn.disconnect()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to send track event", e)
+                Log.e(TRACK_LOG_TAG, "Slack track notify failed", e)
             }
         }
     }

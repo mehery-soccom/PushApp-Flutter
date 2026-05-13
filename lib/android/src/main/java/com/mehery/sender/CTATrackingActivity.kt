@@ -19,31 +19,56 @@ class CTATrackingActivity : Activity() {
 
         Log.d("CTATrackingActivity", "CTA Tracking Activity started: $ctaId, $ctaUrl")
 
-        // 1️⃣ Track CTA
-        clickToken?.let {
-            LiveActivityMessagingService().trackNotificationEvent(it, "cta", ctaId)
+        // Use explicit extra from the PendingIntent — do not infer from cta_id (can be wrong with
+        // FLAG_UPDATE_CURRENT / stale notification PendingIntent reuse).
+        val trackEvent = intent.getStringExtra(LiveActivityMessagingService.EXTRA_TRACK_EVENT)
+        val eventType = when (trackEvent) {
+            LiveActivityMessagingService.TRACK_EVENT_CTA -> "cta"
+            else -> "opened"
+        }
+        val ctaIdForTrack = if (eventType == "cta") ctaId else null
+
+        // 1️⃣ Track (HTTP from native so cold start still hits the API — broadcast runs before Flutter listens)
+        if (!clickToken.isNullOrEmpty()) {
+            LiveActivityMessagingService.trackNotificationEvent(
+                clickToken,
+                eventType,
+                ctaIdForTrack,
+                ctaUrl
+            )
         }
 
-        // 2️⃣ Open browser safely
+        // 2️⃣ Open browser for CTA, otherwise bring the Flutter app to the foreground
         if (!ctaUrl.isNullOrBlank()) {
             try {
-                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ctaUrl)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(browserIntent)
-                Log.d("CTATrackingActivity", "Browser launched for URL: $ctaUrl")
+                startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(ctaUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
             } catch (e: Exception) {
                 Log.e("CTATrackingActivity", "Failed to open URL: $ctaUrl", e)
             }
+        } else {
+            val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            if (launch != null) {
+                startActivity(launch)
+            } else {
+                Log.e("CTATrackingActivity", "getLaunchIntentForPackage returned null")
+            }
         }
 
-        // 3️⃣ Dismiss notification
-        val notificationManager =
-            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        // 3️⃣ Cancel notification
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (notificationId != -1) notificationManager.cancel(notificationId)
-        else notificationManager.cancelAll()
 
-        // 4️⃣ Close this activity immediately
+        // 4️⃣ Close this activity
         finish()
     }
 }

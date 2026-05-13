@@ -1,33 +1,44 @@
 package com.mehery.admin.mehery_admin
 
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import android.content.IntentFilter
+import io.flutter.plugin.common.EventChannel
 
-class NotificationClickReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val action = intent.action
-        val clickToken = intent.getStringExtra("click_token")
+class MesendEventChannel(private val context: Context) : EventChannel.StreamHandler {
 
-        if (clickToken.isNullOrBlank()) {
-            Log.e("NotificationClickReceiver", "Missing click_token")
-            return
-        }
+    private var eventSink: EventChannel.EventSink? = null
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (intent == null) return
 
-        val service = LiveActivityMessagingService()
+            val token = intent.getStringExtra("token")
+            val event = intent.getStringExtra("event")
+            val ctaId = intent.getStringExtra("ctaId")
 
-        when (action) {
-            "NOTIFICATION_OPENED" -> {
-                Log.d("NotificationClickReceiver", "Notification opened")
-                service.trackNotificationEvent(clickToken, "opened")
+            if (token != null && event != null) {
+                val data = mapOf(
+                    "token" to token,
+                    "event" to event,
+                    "ctaId" to ctaId
+                )
+                eventSink?.success(data)
             }
         }
+    }
 
-        // Always dismiss notification
-        val notificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancelAll()
+    fun register(channel: EventChannel) {
+        channel.setStreamHandler(this)
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        context.registerReceiver(receiver, IntentFilter("MESEND_NOTIFICATION_EVENT"))
+    }
+
+    override fun onCancel(arguments: Any?) {
+        context.unregisterReceiver(receiver)
+        eventSink = null
     }
 }

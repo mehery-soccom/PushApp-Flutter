@@ -3,7 +3,7 @@ import '../notification_templates.dart';
 
 class StandardNotificationWidget extends StatelessWidget {
   final NotificationConfig config;
-  
+
   const StandardNotificationWidget({
     Key? key,
     required this.config,
@@ -16,9 +16,9 @@ class StandardNotificationWidget extends StatelessWidget {
         color: config.backgroundColor,
         image: config.backgroundImageUrl != null
             ? DecorationImage(
-                image: NetworkImage(config.backgroundImageUrl!),
-                fit: BoxFit.cover,
-              )
+          image: NetworkImage(config.backgroundImageUrl!),
+          fit: BoxFit.cover,
+        )
             : null,
       ),
       child: Column(
@@ -43,17 +43,17 @@ class StandardNotificationWidget extends StatelessWidget {
           if (config.buttons != null)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: config.buttons!.map((button) => 
-                ElevatedButton(
-                  onPressed: () {
-                    // Handle button action
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: button.backgroundColor,
-                    foregroundColor: button.textColor,
+              children: config.buttons!.map((button) =>
+                  ElevatedButton(
+                    onPressed: () {
+                      // Handle button action
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: button.backgroundColor,
+                      foregroundColor: button.textColor,
+                    ),
+                    child: Text(button.text),
                   ),
-                  child: Text(button.text),
-                ),
               ).toList(),
             ),
         ],

@@ -1,6 +1,6 @@
 name: mehery_sender
 description: A Flutter package to send device tokens to a server.
-version: 0.0.12
+version: 0.1.0
 homepage: https://github.com/mehery-soccom/mehery_sender_flutter.git
 
 environment:
@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   http: ^1.1.0 # For HTTP requests
   app_set_id: ^1.2.0 # For app-specific identification (if used)
+  firebase_core: ^2.24.2
   firebase_messaging: ^14.0.0
   flutter_local_notifications: ^16.3.0
   shared_preferences: ^2.2.2

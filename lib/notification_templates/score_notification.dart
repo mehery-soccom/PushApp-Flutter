@@ -38,10 +38,10 @@ class ScoreNotificationConfig extends NotificationConfig {
       team2LogoUrl: json['team2_logo_url'],
       matchStatus: json['match_status'],
       additionalInfo: json['additional_info'],
-      backgroundColor: json['background_color'] != null 
+      backgroundColor: json['background_color'] != null
           ? Color(int.parse(json['background_color'], radix: 16))
           : null,
-      buttons: (json['buttons'] as List?)?.map((b) => 
+      buttons: (json['buttons'] as List?)?.map((b) =>
           NotificationButton.fromJson(b)).toList(),
     );
   }

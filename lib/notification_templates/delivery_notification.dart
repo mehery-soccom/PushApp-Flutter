@@ -32,10 +32,10 @@ class DeliveryNotificationConfig extends NotificationConfig {
       driverImageUrl: json['driver_image_url'],
       vehicleImageUrl: json['vehicle_image_url'],
       progress: json['progress']?.toDouble(),
-      backgroundColor: json['background_color'] != null 
+      backgroundColor: json['background_color'] != null
           ? Color(int.parse(json['background_color'], radix: 16))
           : null,
-      buttons: (json['buttons'] as List?)?.map((b) => 
+      buttons: (json['buttons'] as List?)?.map((b) =>
           NotificationButton.fromJson(b)).toList(),
     );
   }
