@@ -167,6 +167,19 @@ _ParsedPushappId _parsePushappIdentifier(String identifier) {
   return _ParsedPushappId(tenant: tenant, channelId: channelId);
 }
 
+/// PushApp API host TLD for `https://<tenant>.pushapp.<tld>`.
+///
+/// - [sandbox] `false` → production **`.net`**
+/// - [sandbox] `true` → client sandbox **`.ai`**
+/// - [developmentHost] `true` → internal development **`.co.in`** (overrides [sandbox])
+String pushappHostTld({
+  required bool sandbox,
+  bool developmentHost = false,
+}) {
+  if (developmentHost) return 'co.in';
+  return sandbox ? 'ai' : 'net';
+}
+
 class Pushapp {
   late final String serverUrl;
 
@@ -181,6 +194,11 @@ class Pushapp {
   final String tenant;
   final String channelId;
   bool sandbox = false;
+
+  /// When `true`, API/WebSocket hosts use **`.co.in`** (internal development only).
+  bool developmentHost = false;
+
+  late final String _hostTld;
   String userId = "";
   String guestId = "";
   BuildContext? buildContext;
@@ -205,12 +223,17 @@ class Pushapp {
 
 
 
-  factory Pushapp({required String identifier, bool sandbox = false}) {
+  factory Pushapp({
+    required String identifier,
+    bool sandbox = false,
+    bool developmentHost = false,
+  }) {
     final parts = _parsePushappIdentifier(identifier);
     return Pushapp._(
       tenant: parts.tenant,
       channelId: parts.channelId,
       sandbox: sandbox,
+      developmentHost: developmentHost,
     );
   }
 
@@ -218,8 +241,13 @@ class Pushapp {
     required this.tenant,
     required this.channelId,
     required this.sandbox,
+    required this.developmentHost,
   }) {
-    serverUrl = 'https://$tenant.pushapp.${sandbox ? "co.in" : "com"}';
+    _hostTld = pushappHostTld(
+      sandbox: sandbox,
+      developmentHost: developmentHost,
+    );
+    serverUrl = 'https://$tenant.pushapp.$_hostTld';
 
     const eventChannel = EventChannel("mesend_event_channel");
 
@@ -933,7 +961,7 @@ $activityLine• *user_id*: ${userIdForSlack.isEmpty ? '(none)' : userIdForSlack
 
   void _setupSocket(String userId) {
     sdkPrint("SocketStarted : $userId");
-    _socketService.connect(userId,tenant,sandbox);
+    _socketService.connect(userId, tenant, _hostTld);
 
     _socketService.notificationStream.listen((notification) {
       sdkPrint("Received notification: $notification");
@@ -2918,7 +2946,7 @@ class SocketService {
   bool _isConnected = false;
   Timer? _reconnectTimer;
   String? _tenant;
-  bool _sandbox = false;
+  String _hostTld = 'net';
   static final DeviceInfoPlugin _deviceInfoPlugin = DeviceInfoPlugin();
 
   // Stream controller for notifications
@@ -2926,11 +2954,11 @@ class SocketService {
   Stream<Map<String, dynamic>> get notificationStream => _notificationController.stream;
 
   // Connect to WebSocket
-  void connect(String userId,String tenant,bool sandbox) {
+  void connect(String userId, String tenant, String hostTld) {
     sdkPrint("Connect Called");
     _userId = userId;
     _tenant = tenant;
-    _sandbox = sandbox;
+    _hostTld = hostTld;
     _connectToSocket();
   }
 
@@ -2964,7 +2992,7 @@ class SocketService {
     sdkPrint("Connect to socket Called");
     try {
       // Replace with your actual WebSocket URL
-      final wsUrl = 'wss://$_tenant.pushapp.${_sandbox ? "co.in" : "com"}/pushapp';
+      final wsUrl = 'wss://$_tenant.pushapp.$_hostTld/pushapp';
       // final wsUrl = 'wss://8e5aebdbe23d.ngrok-free.app/pushapp';
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       sdkPrint(wsUrl);

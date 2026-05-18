@@ -120,7 +120,16 @@ final pushapp = Pushapp(
 await pushapp.initializeAndSendToken();
 ```
 
-`initializeAndSendToken()` registers the device token with the backend (FCM on Android; platform-appropriate flow on iOS). Use `sandbox: true` for sandbox hosts.
+`initializeAndSendToken()` registers the device token with the backend (FCM on Android; platform-appropriate flow on iOS).
+
+**API hosts** (`https://<tenant>.pushapp.<tld>`):
+
+| `sandbox` | Host TLD |
+|-----------|----------|
+| `false` | **`.net`** (production) |
+| `true` | **`.ai`** (client sandbox) |
+
+For internal Mehery development against **`.co.in`**, pass `developmentHost: true` (not for production app builds).
 
 ### 5) Provide context for in-app notifications
 
@@ -253,14 +262,15 @@ MeSendTooltipWrapper(
 
 ### Core / lifecycle
 
-#### `Pushapp({required String identifier, bool sandbox})`
+#### `Pushapp({required String identifier, bool sandbox, bool developmentHost})`
 
 Creates the SDK client.
 
 **Parameters:**
 
 - `identifier` (string, required): **App id** — e.g. `demo_1751694691225`. The **channel id** for APIs is this full string; the **tenant** subdomain is the substring before the first `_` (`demo`). If you still use the old form **`tenant$channel`**, that is supported for backward compatibility.
-- `sandbox` (bool, optional): `true` uses sandbox hosts (`*.pushapp.co.in`), `false` production (`*.pushapp.com`).
+- `sandbox` (bool, optional): `false` → **`*.pushapp.net`** (production). `true` → **`*.pushapp.ai`** (client sandbox).
+- `developmentHost` (bool, optional, default `false`): when `true`, uses **`*.pushapp.co.in`** for internal development (overrides `sandbox`). Do not ship this to end-user production builds.
 
 #### `Future<void> initializeAndSendToken()`
 
