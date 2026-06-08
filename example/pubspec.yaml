@@ -30,7 +30,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  firebase_messaging: ^14.0.0 # For Firebase token management
+  firebase_messaging: ^16.3.0 # For Firebase token management
   super_tooltip: ^2.0.7
   mehery_sender:
     path: ../
