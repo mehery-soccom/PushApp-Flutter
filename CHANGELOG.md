@@ -27,6 +27,11 @@
 ## 0.0.12
 - README added
 
+## 0.1.7
+
+- Load device registration state before sending events.
+- README updates and documentation improvements.
+
 ## 0.1.0
 
 - Declare **`firebase_core`** as a direct dependency (required for imports and pub.dev validation).

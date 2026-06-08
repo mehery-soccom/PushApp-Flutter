@@ -2985,6 +2985,7 @@ $activityLine• *user_id*: ${userIdForSlack.isEmpty ? '(none)' : userIdForSlack
 
 
   Future<void> sendEvent(String eventName, Map<String, dynamic> eventData) async {
+    await _loadDeviceRegistrationState();
     _requireDeviceRegistered();
     final prefs = await SharedPreferences.getInstance();
     var userId = prefs.getString('user_id') ?? '';
@@ -3644,7 +3645,7 @@ class _MeSendWidgetState extends State<MeSendWidget> {
   @override
   void initState() {
     super.initState();
-
+    print("MESENDINIT");
     widget.meSend.sendEvent('widget_open', {
       'compare': widget.placeholderId,
     });

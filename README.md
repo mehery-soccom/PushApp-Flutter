@@ -1,47 +1,178 @@
-# PushApp-Flutter SDK
+# PushApp Flutter SDK
 
-A lightweight Flutter package for push notifications, custom in-app messages (popup, banner, PiP, inline, tooltip), event tracking, and session handling for your Flutter apps.
+Flutter SDK for push notifications, event tracking, and in-app messages (popup, banner, PiP, roadblock).
 
 ---
-
 ## What Your App Must Add (Quick Checklist)
 
-Your Flutter app should include all of the following:
+Your Ionic/Capacitor app should include all of the following:
 
 - Firebase config files:
   - Android: `android/app/google-services.json`
-  - iOS: `ios/Runner/GoogleService-Info.plist`
-- Push capability on iOS and foreground notification handling in `AppDelegate.swift` (see platform guides)
-- SDK initialization at startup: create a `Pushapp` instance and call `initializeAndSendToken()`
-- Firebase background handler registered in `main()` (`meSendFirebaseMessagingBackgroundHandler`) so background receipts behave consistently
+  - iOS: `ios/App/GoogleService-Info.plist`
+- Push capability on iOS and foreground notification handling in `AppDelegate.swift`
+- SDK initialization at app startup (`PushApp.initialize`)
+- Push token registration from app code (`PushApp.register`)
 - User identity and tracking calls where they match your user journey:
-  - `Pushapp.login`
-  - `Pushapp.initPage` (page context for in-app surfaces)
-  - `Pushapp.sendEvent`
-  - `Pushapp.createOrUpdateCustomerProfile` (after login, recommended)
-- Optional **session geo** reporting (`Pushapp.postSessionGeo`) after **`login`** (SDK persists **`session_id`** when **`device/link`** returns it); you must pass real location fields via **`PushSessionGeoData`**
-- `BuildContext` for in-app UI via `setInAppNotification` before expecting overlays
-- Optional: `navigatorObservers` with `meSendRouteObserver` for route-based page events
-- Inline/tooltip widgets (`MeSendWidget`, `registerWidget`, `MeSendTooltipWrapper`) only if you use those surfaces
+  - `PushApp.login`
+  - `PushApp.setPageName`
+  - `PushApp.sendEvent`
+  - `PushApp.saveUserData` (after login)
+- Placeholder/tooltip registration only if you use inline/tooltip in-app surfaces
+---
+
+# Part 1 — Setup
+
+One-time project configuration before writing SDK integration code.
 
 ---
 
-## 📦 Installation
+## 1.1 Dependencies
 
-Add the dependency to your app’s `pubspec.yaml`:
+Add to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mehery_sender: ^0.1.0
-```
+  flutter:
+    sdk: flutter
+  mehery_sender: ^0.1.7
+  firebase_core: ^4.10.0
+  firebase_messaging: ^16.3.0
 
-Then install packages:
+dependency_overrides:
+  firebase_core: ^4.10.0
+  firebase_messaging: ^16.3.0
+  flutter_local_notifications: ^18.0.1
+```
 
 ```bash
 flutter pub get
 ```
 
-For iOS, install CocoaPods dependencies:
+---
+
+## 1.2 Firebase Console
+
+1. Open [Firebase Console](https://console.firebase.google.com/)
+2. Create a project (or use an existing one)
+3. Register an **Android** app — use your `applicationId` (e.g. `com.example.myapp`)
+4. Register an **iOS** app — use the same bundle ID as in Xcode
+
+Download and place the config files:
+
+| Platform | File | Location |
+|----------|------|----------|
+| Android | `google-services.json` | `android/app/google-services.json` |
+| iOS | `GoogleService-Info.plist` | `ios/Runner/GoogleService-Info.plist` |
+
+In Xcode, ensure `GoogleService-Info.plist` is added to the **Runner** target.
+
+---
+
+## 1.3 FlutterFire CLI
+
+Generate `lib/firebase_options.dart`:
+
+```bash
+dart pub global activate flutterfire_cli
+flutterfire configure
+```
+
+---
+
+## 1.4 Android platform config
+
+**`android/settings.gradle.kts`**
+
+```kotlin
+plugins {
+    id("dev.flutter.flutter-plugin-loader") version "1.0.0"
+    id("com.android.application") version "8.11.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    id("com.google.gms.google-services") version "4.4.2" apply false
+}
+```
+
+**`android/app/build.gradle.kts`**
+
+```kotlin
+plugins {
+    id("com.android.application")
+    id("kotlin-android")
+    id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
+}
+
+android {
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+```
+
+**`android/app/src/main/AndroidManifest.xml`**
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <application ...>
+```
+
+---
+
+## 1.5 iOS platform config
+
+**Xcode → Runner → Signing & Capabilities**
+
+- **Push Notifications**
+- **Background Modes** → Remote notifications *(optional, for background delivery)*
+
+**`ios/Runner/Runner.entitlements`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>aps-environment</key>
+    <string>development</string>
+</dict>
+</plist>
+```
+
+Use `production` for App Store / TestFlight builds.
+
+**`ios/Runner/AppDelegate.swift`**
+
+```swift
+import Flutter
+import UIKit
+import UserNotifications
+
+@main
+@objc class AppDelegate: FlutterAppDelegate {
+  override func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+  ) -> Bool {
+    UNUserNotificationCenter.current().delegate = self
+    application.registerForRemoteNotifications()
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+}
+```
+
+**`ios/Podfile`**
+
+```ruby
+platform :ios, '15.0'
+```
 
 ```bash
 cd ios && pod install && cd ..
@@ -49,355 +180,321 @@ cd ios && pod install && cd ..
 
 ---
 
-## Step-by-Step Setup (Flutter)
+## 1.6 Setup checklist
 
-### 1) Add Firebase files
-
-- Android: place `google-services.json` in `android/app/`
-- iOS: add `GoogleService-Info.plist` to your Runner target
-
-### 2) iOS push setup
-
-Enable **Push Notifications** in Xcode and add foreground handling:
-
-```swift
-import UserNotifications
-
-func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-    UNUserNotificationCenter.current().delegate = self
-    return true
-}
-
-func userNotificationCenter(_ center: UNUserNotificationCenter,
-                            willPresent notification: UNNotification,
-                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-    if #available(iOS 14.0, *) {
-        completionHandler([.banner, .sound, .badge])
-    } else {
-        completionHandler([.alert, .sound, .badge])
-    }
-}
+```
+✓ pubspec.yaml dependencies added
+✓ android/app/google-services.json
+✓ lib/firebase_options.dart (flutterfire configure)
+✓ Android Gradle + POST_NOTIFICATIONS permission
+✓ ios/Runner/GoogleService-Info.plist
+✓ iOS Push capability + entitlements + AppDelegate
+✓ pod install
 ```
 
-See [IOSREADME.md](./IOSREADME.md) for Live Activities and extended iOS integration.
+---
 
-### 3) Register background messaging (recommended)
+# Part 2 — Implementation
 
-In `main()`, before `runApp`:
+Dart code to wire the SDK into your app. Complete **Part 1** first.
 
-```dart
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:mehery_sender/mehery_sender.dart';
+---
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-
-  FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
-
-  runApp(const MyApp());
-}
-```
-
-### 4) Initialize SDK at app startup
-
-Create one shared `Pushapp` instance. Pass your **full app / channel id** (same format as the Ionic SDK `appId`), for example `demo_1751694691225`:
-
-- **Tenant** (subdomain for `https://<tenant>.pushapp...`) = substring **before the first `_`** → `demo`
-- **Channel id** sent to APIs = the **entire string** → `demo_1751694691225`
-
-Legacy identifiers using a **`$`** separator (`tenant$channel`) are still accepted.
+## 2.1 Import
 
 ```dart
 import 'package:mehery_sender/mehery_sender.dart';
+```
 
-final pushapp = Pushapp(
-  identifier: 'demo_1751694691225',
+---
+
+## 2.2 SDK instance — `lib/push_service.dart`
+
+Create one shared instance and a navigator key for in-app overlays:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:mehery_sender/mehery_sender.dart';
+
+final pushApp = Pushapp(
+  identifier: 'yourTenant_yourChannelId', // from Mehery dashboard
   sandbox: false,
 );
 
-await pushapp.initializeAndSendToken();
+final pushAppNavigatorKey = GlobalKey<NavigatorState>();
+
+void registerPushInAppContext() {
+  final context = pushAppNavigatorKey.currentContext;
+  if (context != null && context.mounted) {
+    pushApp.setInAppNotification(context);
+  }
+}
+
+Future<void> initializePushApp({
+  required String? fcmToken,
+  required String? apnsToken,
+}) async {
+  await pushApp.initializeAndSendToken(
+    fcmToken: fcmToken,
+    apnsToken: apnsToken,
+  );
+  registerPushInAppContext();
+}
 ```
 
-`initializeAndSendToken()` registers the device token with the backend (FCM on Android; platform-appropriate flow on iOS).
+---
 
-**API hosts** (`https://<tenant>.pushapp.<tld>`):
-
-| `sandbox` | Host TLD |
-|-----------|----------|
-| `false` | **`.net`** (production) |
-| `true` | **`.ai`** (client sandbox) |
-
-For internal Mehery development against **`.co.in`**, pass `developmentHost: true` (not for production app builds).
-
-### 5) Provide context for in-app notifications
-
-Before showing popup/banner/PiP style surfaces:
+## 2.3 App entry — `lib/main.dart`
 
 ```dart
-pushapp.setInAppNotification(context);
+import 'dart:async';
+import 'dart:io';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
+import 'package:mehery_sender/mehery_sender.dart';
+
+import 'firebase_options.dart';
+import 'push_service.dart';
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await MeSendPushNotificationDisplay.handleRemoteMessage(
+    message,
+    source: 'background',
+  );
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await MeSendPushNotificationDisplay.ensureInitialized();
+  MeSendPushNotificationDisplay.attachFirebaseListeners();
+
+  runApp(const MyApp());
+  unawaited(_setupPush());
+}
+
+Future<void> _setupPush() async {
+  final messaging = FirebaseMessaging.instance;
+  await messaging.requestPermission(alert: true, badge: true, sound: true);
+
+  String? fcmToken;
+  String? apnsToken;
+
+  if (Platform.isAndroid) {
+    fcmToken = await messaging.getToken();
+  } else if (Platform.isIOS) {
+    fcmToken = await messaging.getToken();
+    apnsToken = await messaging.getAPNSToken();
+  }
+
+  await initializePushApp(fcmToken: fcmToken, apnsToken: apnsToken);
+}
 ```
 
-### 6) Link user/session + events
+---
 
-```dart
-await pushapp.login('user_123');
+## 2.4 `MaterialApp`
 
-pushapp.initPage('home');
-
-await pushapp.sendEvent('button_clicked', {
-  'source': 'welcome_screen',
-  'method': 'google',
-});
-```
-
-### 7) Optional: route observer for navigation events
-
-Attach the observer included on your `Pushapp` instance:
+Pass the 'pushAppNavigatorKey' key from `push_service.dart`:
 
 ```dart
 MaterialApp(
-  navigatorObservers: [pushapp.meSendRouteObserver],
-  // ...
+  navigatorKey: pushAppNavigatorKey,
+  home: const HomeScreen(),
 );
 ```
 
-### 8) Update customer profile (recommended after login)
+---
+
+## 2.5 Login / logout
+
+**On sign-in** (after your auth succeeds):
 
 ```dart
-final headers = await pushapp.getDeviceHeaders();
-final deviceId = headers['X-Device-ID'] ?? '';
-final code = 'user_123_$deviceId';
-
-await pushapp.createOrUpdateCustomerProfile(
-  code: code,
-  additionalInfo: {'city': 'Mumbai', 'plan': 'free'},
-  cohorts: {'segment': 'trial'},
-  completion: (success) {
-    // handle result
-  },
-);
+await pushApp.login(userId);
 ```
 
-### 9) Session geo (optional)
-
-Sends **`POST /pushapp/api/session/geo`** on your tenant host. The SDK adds **`session_id`** automatically after **`login`** when **`device/link`** returns a session (otherwise the call returns **`false`**).
-
-You supply **`geoIP`** by building **`PushSessionGeoData`** from GPS, platform locale, IP lookup, or your backend — the SDK does not invent coordinates.
-
-**`geoIP` JSON shape** (also see **`PushSessionGeoData`** in Dart):
-
-| Field | Type | What you provide |
-|--------|------|------------------|
-| `geoIP.ip` | `string` | IPv4 for this session/device (from your network stack or server). |
-| `geoIP.location.lat` | `number` | Latitude, decimal degrees (WGS‑84). |
-| `geoIP.location.lng` | `number` | Longitude, decimal degrees (WGS‑84). |
-| `geoIP.country.iso_code` | `string` | Country ISO code (e.g. `IN`, `US`). |
-| `geoIP.country.name` | `string` | Country display name. |
-| `geoIP.region.iso_code` | `string` | Region/state ISO code (e.g. `MH`, `NY`). |
-| `geoIP.region.name` | `string` | Region/state display name. |
-| `geoIP.city.name` | `string` | City name. |
-| `geoIP.area.name` | `string` | Area or neighborhood / locality name. |
-
-**Example**
+**On sign-out**:
 
 ```dart
-final geo = PushSessionGeoData(
-  ip: '203.0.113.10',
-  lat: 19.07609,
-  lng: 72.87771,
-  countryIsoCode: 'IN',
-  countryName: 'India',
-  regionIsoCode: 'MH',
-  regionName: 'Maharashtra',
-  cityName: 'Mumbai',
-  areaName: 'Parel',
-);
-
-final ok = await pushapp.postSessionGeo(geo);
+await pushApp.logout(userId);
 ```
 
-### 10) Optional: inline + tooltip in-app placements
+---
 
-#### 🎨 Inline placeholder (`MeSendWidget`)
+## 2.6 Screen tracking
 
-Embeds HTML/WebView-driven inline content for a given placeholder id:
+Call in each screen that should receive in-app messages:
 
 ```dart
+@override
+void initState() {
+  super.initState();
+  pushApp.initPage('dashboard');
+}
+```
+
+---
+
+## 2.7 Custom events *(optional)*
+
+```dart
+await pushApp.sendEvent('event_name', {'key': 'value'});
+```
+
+
+---
+
+## 2.8 Example Implementation file layout
+
+```
+lib/
+  main.dart                 ← Firebase init, listeners, token → SDK
+  push_service.dart         ← Pushapp instance, navigatorKey
+  firebase_options.dart     ← from flutterfire configure
+  screens/
+    login_screen.dart       ← pushApp.login(userId)
+    dashboard_screen.dart   ← pushApp.initPage('dashboard')
+```
+
+---
+
+---
+
+## 2.9 Inline placeholder *(optional)*
+
+Use when Mehery delivers **inline HTML content** into a fixed area on your screen (banner/card slot).
+
+The `placeholderId` must match the id configured in the Mehery dashboard for that slot.
+
+```dart
+import 'package:mehery_sender/mehery_sender.dart';
+import '../push_service.dart';
+
 MeSendWidget(
-  placeholderId: 'my_placeholder_id',
-  meSend: pushapp,
+  placeholderId: 'home_banner_slot',
+  meSend: pushApp,
   height: 200,
   width: double.infinity,
 )
 ```
 
-#### 💬 Tooltip anchor (`registerWidget`)
-
-Wraps a child widget so tooltips can anchor to it (uses the SDK tooltip pipeline):
+Place it in your widget tree where the inline content should appear:
 
 ```dart
-pushapp.registerWidget(
-  placeholderId: 'my_tooltip_target',
-  child: YourButton(),
-);
-```
-
-#### 💬 Tooltip wrapper (`MeSendTooltipWrapper`)
-
-Alternative wrapper for tooltip-style surfaces:
-
-```dart
-MeSendTooltipWrapper(
-  placeholderId: 'my_tooltip_target',
-  meSend: pushapp,
-  child: YourButton(),
+Column(
+  children: [
+    const Text('Welcome'),
+    MeSendWidget(
+      placeholderId: 'home_banner_slot',
+      meSend: pushApp,
+      height: 180,
+    ),
+    const Text('More content'),
+  ],
 )
 ```
 
----
-
-## 📋 API Reference
-
-### Core / lifecycle
-
-#### `Pushapp({required String identifier, bool sandbox, bool developmentHost})`
-
-Creates the SDK client.
-
-**Parameters:**
-
-- `identifier` (string, required): **App id** — e.g. `demo_1751694691225`. The **channel id** for APIs is this full string; the **tenant** subdomain is the substring before the first `_` (`demo`). If you still use the old form **`tenant$channel`**, that is supported for backward compatibility.
-- `sandbox` (bool, optional): `false` → **`*.pushapp.net`** (production). `true` → **`*.pushapp.ai`** (client sandbox).
-- `developmentHost` (bool, optional, default `false`): when `true`, uses **`*.pushapp.co.in`** for internal development (overrides `sandbox`). Do not ship this to end-user production builds.
-
-#### `Future<void> initializeAndSendToken()`
-
-Requests notification permission where applicable, reads the device token, and registers it with the backend.
-
-#### `void setInAppNotification(BuildContext context)`
-
-Stores `BuildContext` used when rendering in-app notification UI.
-
-#### `Future<void> login(String userId)`
-
-Associates the device/session with a user.
-
-#### `Future<void> logout(String userId)`
-
-Delinks the user from the device on the server.
-
-#### `void initPage(String page)`
-
-Signals the current page name for in-app / analytics flows.
-
-#### `Future<void> sendEvent(String eventName, Map<String, dynamic> eventData)`
-
-Sends a custom event (`POST` to `/pushapp/api/v1/event`).
-
-#### `Future<Map<String, String>> getDeviceHeaders()`
-
-Returns device/app metadata headers (`X-Device-ID`, `X-App-Version`, platform fields, etc.) for authenticated calls.
-
-#### `Future<void> createOrUpdateCustomerProfile({...})`
-
-Creates or updates customer profile data (`PUT` `/pushapp/api/v1/customer/profile`).
-
-**Parameters:**
-
-- `code` (string, required): Unique customer code (recommended: `userId_deviceId`).
-- `additionalInfo` (map, required): Profile attributes.
-- `cohorts` (map, required): Segmentation attributes.
-- `completion` (callback, required): Called with `true`/`false` for success.
-
-### Session / geo
-
-#### `PushSessionGeoData`
-
-Constructor fields (serialized under **`geoIP`**): **`ip`**, **`lat`**, **`lng`**, **`countryIsoCode`**, **`countryName`**, **`regionIsoCode`**, **`regionName`**, **`cityName`**, **`areaName`** — see Step 9 for the JSON mapping.
-
-#### `Future<bool> postSessionGeo(PushSessionGeoData geo)`
-
-Sends **`POST /pushapp/api/session/geo`** with:
-
-- **`session_id`** — persisted by the SDK after **`login`** when **`device/link`** returns a session id.
-- **`geoIP`** — from **`geo.toGeoIpJson()`** (your **`PushSessionGeoData`**).
-
-Returns **`true`** on HTTP **2xx**, **`false`** if there is no stored session id or the request fails.
-
-#### `static Future<void> postPushReceiptToSlack(RemoteMessage message, String source)`
-
-Internal/diagnostic helper used by the provided background handler; not required for normal integration.
-
-### Placeholder / widget helpers
-
-#### `void registerPlaceholderListener(...)`
-
-Registers a listener for placeholder content pushed over the socket/API path.
-
-#### `void unregisterPlaceholderListener(String placeholderId)`
-
-Removes the listener for a placeholder id.
-
-#### `Widget registerWidget({required String placeholderId, required Widget child})`
-
-Wraps `child` for tooltip registration via `TooltipSdk`.
-
-### Route observer
-
-#### `MeSendRouteObserver` (via `pushapp.meSendRouteObserver`)
-
-`NavigatorObserver` that emits page-related events when attached to `MaterialApp`. Instantiated by the SDK and wired when you construct `Pushapp`.
+The widget registers itself on build and renders HTML/WebView content when the SDK receives a matching in-app message.
 
 ---
 
-## 🔧 Platform-Specific Notes
+## 2.10 Tooltip *(optional)*
 
-### Android
+Use when Mehery delivers a **tooltip** anchored to a specific widget on screen.
 
-- **Minimum SDK**: API 26+ recommended for notification channels (see [AndroidREADME.md](./AndroidREADME.md)).
-- **Firebase**: Apply `google-services` Gradle plugin and include `google-services.json`.
-- **ProGuard** (if enabled): consider keeping SDK classes — for example:
-  ```proguard
-  -keep class com.mehery.** { *; }
-  ```
+The `placeholderId` must match the id configured in the Mehery dashboard for that anchor.
 
-### iOS
 
-- **Minimum**: Align with your app’s deployment target; push setup follows standard Firebase/APNs configuration.
-- **Capabilities**: Push Notifications (and Background Modes if you use background delivery).
-- **Foreground notifications**: Use `UNUserNotificationCenterDelegate` as in Step 2.
-- **Live Activities**: See [IOSREADME.md](./IOSREADME.md) (iOS 16.1+ for ActivityKit features).
+Wrap the target widget. The SDK handles tooltip registration and display:
+
+```dart
+pushApp.registerWidget(
+  placeholderId: 'checkout_help_button',
+  child: IconButton(
+    icon: const Icon(Icons.help_outline),
+    onPressed: () {},
+  ),
+)
+```
+
+### Example in a screen
+
+```dart
+class DashboardScreen extends StatefulWidget {
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    pushApp.initPage('dashboard');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Dashboard'),
+        actions: [
+          pushApp.registerWidget(
+            placeholderId: '{placeholder_id}',
+            child: IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: () {},
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          MeSendWidget(
+            placeholderId: '{placeholder_id}',
+            meSend: pushApp,
+            height: 160,
+          ),
+          // ... rest of screen
+        ],
+      ),
+    );
+  }
+}
+```
+
+> **Note:** Call `initPage` on the screen and ensure `registerPushInAppContext()` has run so in-app messages (including tooltips and placeholders) can display.
 
 ---
 
-## 📄 Example Implementation
+## 2.11 Implementation file layout
 
-See the [`example/`](./example/) directory for a sample app:
-
-- Firebase initialization
-- `Pushapp` construction and `initializeAndSendToken`
-- Login/logout triggers
-
-Session geo: after **`login`**, call **`postSessionGeo(PushSessionGeoData(...))`** with real location fields (see Step 9).
-
----
-
-## 🏷️ Version
-
-Current package version: **`0.1.0`** (see `pubspec.yaml`).
+```
+lib/
+  main.dart                 ← Firebase init, listeners, token → SDK
+  push_service.dart         ← Pushapp instance, navigatorKey
+  firebase_options.dart     ← from flutterfire configure
+  screens/
+    login_screen.dart       ← pushApp.login(userId)
+    dashboard_screen.dart   ← pushApp.initPage('dashboard')
+                              MeSendWidget / registerWidget
+```
 
 ---
 
-## 💬 Support
+## Version
 
-- **Repository**: [mehery_sender_flutter](https://github.com/mehery-soccom/mehery_sender_flutter)
-- **Issues**: [GitHub Issues](https://github.com/mehery-soccom/mehery_sender_flutter/issues)
-- **Platform guides**: [AndroidREADME.md](./AndroidREADME.md), [IOSREADME.md](./IOSREADME.md)
+`^0.1.7`
 
 ---
 
-## 📝 License
+## License
 
 MIT
