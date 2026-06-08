@@ -27,6 +27,12 @@
 ## 0.0.12
 - README added
 
+## 0.1.8
+
+- Upgrade `firebase_core` to `^4.10.0` and `firebase_messaging` to `^16.3.0`.
+- Upgrade `flutter_local_notifications` to `^22.0.0`.
+- Raise minimum SDK to Dart `>=3.10.0` and Flutter `>=3.38.1`.
+
 ## 0.1.7
 
 - Load device registration state before sending events.

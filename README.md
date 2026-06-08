@@ -35,14 +35,14 @@ Add to `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.7
+  mehery_sender: ^0.1.8
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
 
 dependency_overrides:
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
-  flutter_local_notifications: ^18.0.1
+  flutter_local_notifications: ^22.0.0
 ```
 
 ```bash
@@ -491,7 +491,7 @@ lib/
 
 ## Version
 
-`^0.1.7`
+`^0.1.8`
 
 ---
 
