@@ -241,9 +241,9 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.12...HEAD
-[0.1.12]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.11...v0.1.12
-[0.1.11]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.10...v0.1.11
-[0.1.10]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.8...v0.1.10
-[0.1.8]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.0...v0.1.8
-[0.1.0]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.0.12...v0.1.0
+[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.8...v0.1.10
+[0.1.8]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.0...v0.1.8
+[0.1.0]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.0.12...v0.1.0

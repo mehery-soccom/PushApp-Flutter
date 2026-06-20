@@ -3,10 +3,10 @@ description: >-
   Flutter SDK for Mehery PushApp — push notifications, event tracking,
   in-app messages (banner, popup, PiP), and Android native notification templates.
 version: 0.1.12
-homepage: https://github.com/mehery-soccom/mehery_sender_flutter
-repository: https://github.com/mehery-soccom/mehery_sender_flutter
-issue_tracker: https://github.com/mehery-soccom/mehery_sender_flutter/issues
-documentation: https://github.com/mehery-soccom/mehery_sender_flutter#readme
+homepage: https://github.com/mehery-soccom/PushApp-Flutter
+repository: https://github.com/mehery-soccom/PushApp-Flutter
+issue_tracker: https://github.com/mehery-soccom/PushApp-Flutter/issues
+documentation: https://github.com/mehery-soccom/PushApp-Flutter#readme
 
 topics:
   - push-notifications
