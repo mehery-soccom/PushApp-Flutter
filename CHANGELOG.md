@@ -10,6 +10,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.13] - 2026-06-19
+
+Pub.dev metadata release — no API or behavior changes.
+
+### Changed
+
+- **Repository URLs** — `homepage`, `repository`, `issue_tracker`, and `documentation` in `pubspec.yaml` now point to [PushApp-Flutter](https://github.com/mehery-soccom/PushApp-Flutter).
+
+### Migration from 0.1.12 → 0.1.13
+
+Bump `mehery_sender: ^0.1.13` only. No code changes.
+
+---
+
 ## [0.1.12] - 2026-06-19
 
 Fixes inline in-app slots waiting for tooltips or overlay dismissals.
@@ -241,7 +255,8 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.12...HEAD
+[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.13...HEAD
+[0.1.13]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.8...v0.1.10
