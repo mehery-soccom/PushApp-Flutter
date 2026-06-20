@@ -2,10 +2,12 @@
 
 Flutter SDK for push notifications, event tracking, and in-app messages (popup, banner, PiP, roadblock).
 
+**Documentation site:** [https://mehery-soccom.github.io/PushApp-Flutter/](https://mehery-soccom.github.io/PushApp-Flutter/) — source in [`docs/`](docs/). Do not use `docs.mehery.com/PushApp-Flutter/` (see [docs/README.md](docs/README.md)).
+
 ---
 ## What Your App Must Add (Quick Checklist)
 
-Your Ionic/Capacitor app should include all of the following:
+Your Flutter app should include all of the following:
 
 - Firebase config files:
   - Android: `android/app/google-services.json`

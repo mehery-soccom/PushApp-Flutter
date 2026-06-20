@@ -6,7 +6,7 @@ version: 0.1.13
 homepage: https://github.com/mehery-soccom/PushApp-Flutter
 repository: https://github.com/mehery-soccom/PushApp-Flutter
 issue_tracker: https://github.com/mehery-soccom/PushApp-Flutter/issues
-documentation: https://github.com/mehery-soccom/PushApp-Flutter#readme
+documentation: https://mehery-soccom.github.io/PushApp-Flutter/
 
 topics:
   - push-notifications
