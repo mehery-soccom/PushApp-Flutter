@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "22930153229",
+    "project_id": "mehery-75d3b",
+    "storage_bucket": "mehery-75d3b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:22930153229:android:example0000000000000000",
+        "android_client_info": {
+          "package_name": "com.example.example"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAHz076gHJHvmfMJD1K4G9qm0Sp-Oeqp-M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

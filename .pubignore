@@ -1,0 +1,9 @@
+# Legacy Android layout (migrated to plugin `android/` + `assets/layouts/`)
+lib/android/
+
+# Local build / tooling (never publish)
+.dart_tool/
+.packages
+build/
+**/.dart_tool/
+**/build/

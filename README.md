@@ -29,25 +29,57 @@ One-time project configuration before writing SDK integration code.
 
 ## 1.1 Dependencies
 
-Add to `pubspec.yaml`:
+Add to your app `pubspec.yaml`:
 
 ```yaml
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.8
+  mehery_sender: ^0.1.10
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
-
-dependency_overrides:
-  firebase_core: ^4.10.0
-  firebase_messaging: ^16.3.0
-  flutter_local_notifications: ^22.0.0
 ```
+
+`flutter_local_notifications` is pulled in **transitively** by `mehery_sender` for foreground tray display — you do **not** need to declare it in the host app.
 
 ```bash
 flutter pub get
 ```
+
+### Compatibility matrix (`mehery_sender` 0.1.10)
+
+Host apps within this matrix do **not** need `dependency_overrides`.
+
+#### Minimum requirements
+
+| Component | Minimum | Source |
+|-----------|---------|--------|
+| Flutter | 3.38.1 | `pubspec.yaml` `environment.flutter` |
+| Dart | 3.10.0 | `pubspec.yaml` `environment.sdk` |
+| Android (API level) | 21 | Plugin `android/` (`minSdk 21`) |
+| iOS deployment target | 15.0 | Recommended `Podfile` (§1.5) |
+| `firebase_core` | 4.10.0 | Host `pubspec.yaml` (`^4.10.0`) |
+| `firebase_messaging` | 16.3.0 | Host `pubspec.yaml` (`^16.3.0`) |
+| `flutter_local_notifications` | 22.0.0 | Transitive via `mehery_sender` |
+
+#### Tested combination (example app / release QA)
+
+Verified with `flutter analyze`, `flutter test`, and example builds on **Flutter 3.44.1 / Dart 3.12.1**:
+
+| Component | Tested version |
+|-----------|----------------|
+| Flutter | 3.44.1 |
+| Dart | 3.12.1 |
+| Android | minSdk 21, compileSdk 34 |
+| iOS | 15.0+ (`platform :ios, '15.0'`) |
+| `firebase_core` | 4.10.0 – 4.11.0 |
+| `firebase_messaging` | 16.3.0 – 16.4.0 |
+| `flutter_local_notifications` | 22.0.0 |
+| `mehery_sender` | 0.1.10 |
+
+New releases document an updated matrix in [CHANGELOG.md](CHANGELOG.md).
+
+**When overrides are needed (rare):** Only if another plugin forces `firebase_core` &lt; 4.10, `firebase_messaging` &lt; 16.3, or an incompatible `flutter_local_notifications`. Prefer upgrading the conflicting plugin; use `dependency_overrides` only as a temporary workaround and align with the matrix above.
 
 ---
 
@@ -109,6 +141,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    defaultConfig {
+        // mehery_sender plugin requires minSdk 21+
+        minSdk = maxOf(flutter.minSdkVersion, 21)
+    }
 }
 
 dependencies {
@@ -124,9 +160,13 @@ dependencies {
     <application ...>
 ```
 
+**FCM delivery (push-only):** The plugin does **not** register a second `MESSAGING_EVENT` handler. Firebase Cloud Messaging is delivered through **`FlutterFirebaseMessagingService`** (from `firebase_messaging`) into Dart — foreground via `MeSendPushNotificationDisplay`, background via `meSendFirebaseMessagingBackgroundHandler`. Do not add `LiveActivityMessagingService` to your manifest unless you opt into native rich-notification templates (see [AndroidREADME.md](AndroidREADME.md)).
+
 ---
 
 ## 1.5 iOS platform config
+
+This section is the **minimum** for push + in-app SDK features. **Notification Service Extension**, **Notification Content Extension**, and **Live Activity** targets are **optional** — see [IOSREADME.md](IOSREADME.md) for when to add them and step-by-step Xcode setup.
 
 **Xcode → Runner → Signing & Capabilities**
 
@@ -178,6 +218,18 @@ platform :ios, '15.0'
 cd ios && pod install && cd ..
 ```
 
+### Optional: Live Activity & notification extensions
+
+Not required for push registration, foreground notifications, or in-app messages.
+
+| Feature | Guide |
+|---------|--------|
+| Rich mutable push (images, modified content) | [IOSREADME.md — NSE](IOSREADME.md#step-by-step-notification-service-extension) |
+| Custom expanded notification UI | [IOSREADME.md — Content extension](IOSREADME.md#step-by-step-notification-content-extension) |
+| Live Activity / Dynamic Island (iOS 16.1+) | [IOSREADME.md — Live Activity](IOSREADME.md#step-by-step-live-activity-widget-extension) |
+
+The [`example/ios/`](example/ios/) project includes all optional targets as reference; your app can integrate with **Runner only** per the steps above.
+
 ---
 
 ## 1.6 Setup checklist
@@ -190,6 +242,7 @@ cd ios && pod install && cd ..
 ✓ ios/Runner/GoogleService-Info.plist
 ✓ iOS Push capability + entitlements + AppDelegate
 ✓ pod install
+✓ (Optional) NSE / Live Activity — see IOSREADME.md
 ```
 
 ---
@@ -205,6 +258,23 @@ Dart code to wire the SDK into your app. Complete **Part 1** first.
 ```dart
 import 'package:mehery_sender/mehery_sender.dart';
 ```
+
+### Debug logging (optional)
+
+All SDK diagnostics use the prefix **`[MeherySender]`** so you can filter them apart from your app’s own logs (logcat filter `MeherySender`, Xcode console search `MeherySender`).
+
+By default logging follows `kDebugMode` (on in debug, off in release). To trace registration, API, push, or in-app issues in **release/profile** builds, enable logging **before** creating your `Pushapp` instance:
+
+```dart
+import 'package:mehery_sender/mehery_sender.dart';
+
+void main() {
+  meherySenderApiLoggingEnabled = true; // opt-in for release/profile
+  // ...
+}
+```
+
+Subsystem tags appear as `[MeherySender][API]`, `[MeherySender][Push|foreground]`, `[MeherySender][InApp]`, etc.
 
 ---
 
@@ -224,6 +294,7 @@ final pushApp = Pushapp(
 final pushAppNavigatorKey = GlobalKey<NavigatorState>();
 
 void registerPushInAppContext() {
+  pushApp.attachNavigatorKey(pushAppNavigatorKey);
   final context = pushAppNavigatorKey.currentContext;
   if (context != null && context.mounted) {
     pushApp.setInAppNotification(context);
@@ -234,12 +305,71 @@ Future<void> initializePushApp({
   required String? fcmToken,
   required String? apnsToken,
 }) async {
-  await pushApp.initializeAndSendToken(
+  final registered = await pushApp.initializeAndSendToken(
     fcmToken: fcmToken,
     apnsToken: apnsToken,
   );
   registerPushInAppContext();
+  if (!registered) {
+    debugPrint(
+      'PushApp: device registration deferred — tokens may arrive shortly.',
+    );
+  }
 }
+```
+
+### Registration state
+
+Observe device registration without polling [Pushapp.isDeviceRegistered]:
+
+```dart
+// Current snapshot (before or between stream events)
+final snapshot = pushApp.registrationSnapshot;
+
+pushApp.registrationState.listen((state) {
+  switch (state.status) {
+    case MeSendDeviceRegistrationStatus.pending:
+      // Waiting for tokens / first register call
+      break;
+    case MeSendDeviceRegistrationStatus.registered:
+      // Device linked; state.restoredFromCache == true after app restart
+      break;
+    case MeSendDeviceRegistrationStatus.failed:
+      // state.message — retry initializeAndSendToken when tokens are ready
+      break;
+    case MeSendDeviceRegistrationStatus.tokenRefreshed:
+      // Push token updated on server (FCM/APNs refresh)
+      break;
+  }
+});
+```
+
+[Pushapp.deviceRegistrationState] still emits `true`/`false` for simple listeners.
+
+**Retry on failure** — `initializeAndSendToken` returns `Future<bool>` and does not throw unless [meherySenderStrictRegistrationMode] is enabled:
+
+```dart
+Future<void> registerPushWhenReady() async {
+  final messaging = FirebaseMessaging.instance;
+  final fcm = await messaging.getToken();
+  final apns = Platform.isIOS ? await messaging.getAPNSToken() : null;
+
+  final ok = await pushApp.initializeAndSendToken(
+    fcmToken: fcm,
+    apnsToken: apns,
+  );
+  if (!ok) {
+    debugPrint('Registration pending: ${pushApp.registrationSnapshot.message}');
+  }
+}
+
+// Also retry when FCM refreshes the token:
+FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+  await pushApp.initializeAndSendToken(
+    fcmToken: token,
+    apnsToken: Platform.isIOS ? await FirebaseMessaging.instance.getAPNSToken() : null,
+  );
+});
 ```
 
 ---
@@ -258,28 +388,33 @@ import 'package:mehery_sender/mehery_sender.dart';
 import 'firebase_options.dart';
 import 'push_service.dart';
 
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await MeSendPushNotificationDisplay.handleRemoteMessage(
-    message,
-    source: 'background',
-  );
-}
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  configureMeSendFirebaseBackgroundInit(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await MeSendPushNotificationDisplay.ensureInitialized();
-  MeSendPushNotificationDisplay.attachFirebaseListeners();
 
   runApp(const MyApp());
   unawaited(_setupPush());
 }
+```
 
+> **Foreground push:** [MeSendPushNotificationDisplay.ensureInitialized] attaches
+> FCM listeners automatically after [Firebase.initializeApp]. Do **not** call
+> [MeSendPushNotificationDisplay.attachFirebaseListeners] from host code.
+
+> **Background handler:** Register [meSendFirebaseMessagingBackgroundHandler] with
+> [configureMeSendFirebaseBackgroundInit] so Firebase initializes with your
+> FlutterFire `firebase_options.dart` in the background isolate. Alternatively,
+> define your own top-level handler that calls
+> `Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform)` then
+> [MeSendPushNotificationDisplay.handleRemoteMessage].
+
+```dart
 Future<void> _setupPush() async {
   final messaging = FirebaseMessaging.instance;
   await messaging.requestPermission(alert: true, badge: true, sound: true);
@@ -302,12 +437,25 @@ Future<void> _setupPush() async {
 
 ## 2.4 `MaterialApp`
 
-Pass the 'pushAppNavigatorKey' key from `push_service.dart`:
+Pass the navigator key from `push_service.dart` and register SDK route observers for automatic page tracking:
 
 ```dart
 MaterialApp(
   navigatorKey: pushAppNavigatorKey,
+  navigatorObservers: pushApp.navigatorObservers,
   home: const HomeScreen(),
+);
+```
+
+Name your routes when possible so analytics receive stable page ids:
+
+```dart
+Navigator.push(
+  context,
+  MaterialPageRoute<void>(
+    settings: const RouteSettings(name: 'dashboard'),
+    builder: (_) => const DashboardScreen(),
+  ),
 );
 ```
 
@@ -321,17 +469,23 @@ MaterialApp(
 await pushApp.login(userId);
 ```
 
-**On sign-out**:
+**Account switch (same device):** When a different user signs in, call `login(newUserId)` directly. The SDK delinks the previous user (`device/delink`), clears local session state, and links the new user. You do **not** need to call `logout()` first.
+
+**On sign-out** (no replacement user):
 
 ```dart
 await pushApp.logout(userId);
 ```
 
+Both APIs queue or no-op when device registration is still pending — they do not throw during normal startup timing.
+
 ---
 
 ## 2.6 Screen tracking
 
-Call in each screen that should receive in-app messages:
+**Automatic (recommended):** With [navigatorObservers] wired in §2.4, the SDK sends `page_open` and `page_closed` events when the user navigates.
+
+**Manual (optional):** Call [Pushapp.initPage] on a screen to record a page view and trigger an in-app message poll:
 
 ```dart
 @override
@@ -340,6 +494,8 @@ void initState() {
   pushApp.initPage('dashboard');
 }
 ```
+
+Use `initPage` when you need in-app polling on that screen; route observers handle analytics-only tracking.
 
 ---
 
@@ -371,6 +527,8 @@ lib/
 ## 2.9 Inline placeholder *(optional)*
 
 Use when Mehery delivers **inline HTML content** into a fixed area on your screen (banner/card slot).
+
+> **Security:** Campaign HTML runs in WebView with **unrestricted JavaScript**. Configure [CTA URL allowlists](WEBVIEW_SECURITY.md#cta-url-allowlist-recommended-for-production) for production. See [WEBVIEW_SECURITY.md](WEBVIEW_SECURITY.md).
 
 The `placeholderId` must match the id configured in the Mehery dashboard for that slot.
 
@@ -489,9 +647,29 @@ lib/
 
 ---
 
+## CI
+
+Every push and pull request runs [GitHub Actions](.github/workflows/ci.yml):
+
+| Job | Runner | Checks |
+|-----|--------|--------|
+| **Analyze & test** | `ubuntu-latest` | `flutter analyze` (SDK + example), `flutter test` |
+| **Build example (Android)** | `ubuntu-latest` | `flutter build apk --debug` |
+| **Build example (iOS)** | `macos-latest` | `flutter build ios --simulator --debug` |
+
+Requires Flutter **≥ 3.38.1** (stable channel in CI). Fix analyzer errors and failing tests before merging PRs.
+
+---
+
 ## Version
 
-`^0.1.8`
+`^0.1.10` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
+
+**Privacy & data handling:** [PRIVACY.md](PRIVACY.md) (device data, APIs, retention, GDPR/CCPA host checklist).
+
+**WebView / in-app HTML security:** [WEBVIEW_SECURITY.md](WEBVIEW_SECURITY.md) (unrestricted JS, CTA allowlist).
+
+**Publishing to pub.dev:** [PUBLISHING.md](PUBLISHING.md) (metadata, false_secrets, dry-run checklist).
 
 ---
 

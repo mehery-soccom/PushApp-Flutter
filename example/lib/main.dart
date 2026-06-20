@@ -1,120 +1,81 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/services.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:mehery_sender/mehery_sender.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+import 'firebase_options.dart';
+import 'push_service.dart';
+import 'screens/login_screen.dart';
 
-  // Initialize Firebase first
-  try {
-    await Firebase.initializeApp();
-    print('Firebase Initialized');
-  } catch (e) {
-    print('Error initializing Firebase: $e');
-    return;  // Stop if Firebase initialization fails
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  configureMeSendFirebaseBackgroundInit(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await MeSendPushNotificationDisplay.ensureInitialized();
+
+  runApp(const MyApp());
+  unawaited(_setupPush());
+}
+
+Future<void> _setupPush() async {
+  final messaging = FirebaseMessaging.instance;
+  await messaging.requestPermission(alert: true, badge: true, sound: true);
+
+  String? fcmToken;
+  String? apnsToken;
+
+  if (Platform.isAndroid) {
+    fcmToken = await messaging.getToken();
+  } else if (Platform.isIOS) {
+    fcmToken = await messaging.getToken();
+    apnsToken = await messaging.getAPNSToken();
+    if (apnsToken == null || apnsToken.isEmpty) {
+      for (var attempt = 0; attempt < 5; attempt++) {
+        await Future.delayed(const Duration(seconds: 1));
+        apnsToken = await messaging.getAPNSToken();
+        if (apnsToken != null && apnsToken.isNotEmpty) break;
+      }
+    }
   }
 
-  runApp(MyApp());
+  await initializePushApp(fcmToken: fcmToken, apnsToken: apnsToken);
+
+  FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+    String? apns;
+    if (Platform.isIOS) {
+      apns = await FirebaseMessaging.instance.getAPNSToken();
+    }
+    final ok = await pushApp.initializeAndSendToken(
+      fcmToken: token,
+      apnsToken: apns,
+    );
+    if (!ok) {
+      debugPrint('PushApp: token refresh registration deferred');
+    }
+  });
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: HomePage(),
-    );
-  }
-}
-
-class HomePage extends StatefulWidget {
-  @override
-  _HomePageState createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  static const MethodChannel _channel = MethodChannel('com.yourapp/live_activity');
-
-  final Pushapp _tokenSender = Pushapp( // Replace with your server URL
-    identifier : 'MeheryTestFlutter_1734160381705'
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    // Wait until Firebase is initialized and then send the token
-    _initializeTokenSender();
-  }
-
-  // Ensure initialization happens after Firebase is initialized
-  Future<void> _initializeTokenSender() async {
-    // Only initialize the token sender after Firebase has been initialized
-    await _tokenSender.initializeAndSendToken();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Firebase Token Sender Example')),
-      body:  Center(
-        child: Column(
-          children: [
-            const Text(
-              'Token has been sent to the server.',
-              textAlign: TextAlign.center,
-            ),
-            ElevatedButton(onPressed: (){
-              _tokenSender.login("ABCD");
-            }, child: const Text("Login")),
-            ElevatedButton(onPressed: (){
-              _tokenSender.logout("ABCD");
-            }, child: const Text("Logout")),
-            ElevatedButton(
-              onPressed: () async {
-                print("🚀 Starting Live Activity...");
-                await startLiveActivity(); // start it and wait until it completes
-
-                await Future.delayed(const Duration(seconds: 3)); // wait for 3 seconds
-
-                print("🟢 Updating Live Activity...");
-                await update(); // now update it
-              },
-              child: const Text("Live Activity"),
-            ),
-          ],
-        ),
+      title: 'PushApp Example',
+      navigatorKey: pushAppNavigatorKey,
+      navigatorObservers: pushApp.navigatorObservers,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
       ),
+      home: const LoginScreen(),
     );
-  }
-
-  Future<void> startLiveActivity() async {
-    try {
-      final result = await _channel.invokeMethod('startLiveActivity', {
-        'rideId': 'ride001',
-        'etaMinutes': 5,
-        'driverName': 'Sam',
-        'carModel': 'Silver Civic',
-        'licensePlate': 'XYZ 1234',
-        'progress': 0.1,
-      });
-      print('Live Activity started: $result');
-    } catch (e) {
-      print('Error starting Live Activity: $e');
-    }
-  }
-
-  Future<void> update() async {
-    print("📦 update() called");
-    try {
-      final result = await _channel.invokeMethod('updateLiveActivity', {
-        'etaMinutes': 2,
-        'progress': 0.6,
-      });
-      print('Live Activity updated: $result');
-    } catch (e) {
-      print('Error updating Live Activity: $e');
-    }
   }
 }

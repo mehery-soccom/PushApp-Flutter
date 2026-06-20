@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+          FCM delivery is handled by FlutterFirebaseMessagingService (firebase_messaging).
+          Do NOT register LiveActivityMessagingService for MESSAGING_EVENT — dual handlers
+          cause non-deterministic delivery. See README §1.4 and AndroidREADME.md.
+        -->
+        <activity
+            android:name=".CTATrackingActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+    </application>
+</manifest>

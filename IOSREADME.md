@@ -1,143 +1,274 @@
-# 📱 iOS Live Activity Integration Guide (Flutter + ActivityKit)
+# iOS optional extensions guide
 
-This guide explains how to integrate **Live Activities** and **Dynamic Island** widgets in your iOS Flutter app using **ActivityKit** and a **Flutter MethodChannel**.
-
----
-
-## 🧩 Prerequisites
-
-Before proceeding, make sure you have:
-
-- Xcode 15 or later (macOS Sonoma or later recommended)
-- iOS 16.1+ deployment target (Live Activities require iOS 16.1 or higher)
-- Flutter iOS module configured
-- App Group created in your Apple Developer account
+This document covers **optional** native iOS targets for rich push, custom notification UI, and Live Activities. It is separate from the main [README.md](README.md) setup (Part 1 §1.5), which covers the **minimum** push integration.
 
 ---
 
-## ⚙️ Step 1: Enable Capabilities in Xcode
+## Required vs optional
 
-1. Open your iOS Runner project in Xcode.
-2. Select your project in the Project Navigator → Target **Runner** → **Signing & Capabilities**.
-3. Click **+ Capability** → add **Background Modes**, **Push Notifications**, and **App Groups**.
-4. Under **App Groups**, add your group ID — e.g.:
-   ```
-   group.com.mehery.admin.meheryAdmin
-   ```
+| Capability | Required for basic PushApp SDK? | Minimum iOS | Xcode targets |
+|------------|--------------------------------|-------------|---------------|
+| FCM/APNs push, foreground tray, in-app messages, events | **Yes** | **15.0** | **Runner** only |
+| Mutable push payload (download images, modify content before display) | No | 15.0 | + **Notification Service Extension (NSE)** |
+| Custom expanded notification UI (long-look) | No | 15.0 | + **Notification Content Extension** |
+| Live Activity / Dynamic Island from push | No | **16.1** | + **Widget Extension (Live Activity)**; NSE recommended to start activities from push |
 
----
+**Push-only hosts:** Follow [README.md §1.5](README.md#15-ios-platform-config) only. Do **not** add NSE, content extension, or Live Activity targets unless you need those features.
 
-## 🧱 Step 2: Create Live Activity Widget Extension
-
-1. In Xcode, go to **File → New → Target → Widget Extension**.
-2. Name it `DeliveryActivity`.
-3. When prompted, enable **Include Live Activity**.
-4. This will create a folder named **DeliveryActivity** containing `DeliveryActivityLiveActivity.swift`.
+The [`example/ios/`](example/ios/) app ships all optional targets as **reference implementations**. You can delete them from your fork if you only need push + in-app.
 
 ---
 
-## 🧠 Step 3: Add App Group ID to Both Targets
+## Push-only (minimum) recap
 
-1. Open both targets (**Runner** and **DeliveryActivity**) in **Signing & Capabilities**.
-2. Under **App Groups**, ensure both share the **same group ID**.
+1. **Capabilities (Runner):** Push Notifications; Background Modes → Remote notifications (optional but recommended).
+2. **`Runner.entitlements`:** `aps-environment` (`development` or `production`).
+3. **`AppDelegate.swift`:** Register for remote notifications and set `UNUserNotificationCenter` delegate (see README §1.5).
+4. **`Podfile`:** `platform :ios, '15.0'` (or higher).
+5. **Dart:** `firebase_core`, `firebase_messaging`, `mehery_sender` — no native extension wiring required.
 
----
-
-## 🧰 Step 4: Add Live Activity Widget Code
-
-Replace the generated file `DeliveryActivityLiveActivity.swift` with the provided Swift code implementing:
-
-- `DeliveryActivityAttributes` (with `ContentState`)
-- `ActivityConfiguration` for Lock Screen and Dynamic Island
-- `loadImageFromAppGroup()` for image sharing
-- `TextStyleModifier` for styling text dynamically
-
-This file handles dynamic updates to Live Activities.
+No App Groups, no ActivityKit, no extension bundle IDs.
 
 ---
 
-## 🧩 Step 5: Update AppDelegate.swift
+## When to add each extension
 
-In your Flutter iOS Runner target, replace your `AppDelegate.swift` with the provided code:
+### Notification Service Extension (NSE)
 
-- Initializes a **FlutterMethodChannel** named:
-  ```swift
-  com.mehery.admin/live_activity
-  ```
-- Handles **remote notifications** and **Live Activity creation** (`startLiveActivity(userInfo:)`)
-- Saves image assets in the **App Group container**
-- Maps push notification categories to handle CTA actions (e.g., Accept / Reject)
+Add an NSE when Mehery (or your backend) sends pushes with **`mutable-content: 1`**. The NSE runs before the notification is shown and can:
+
+- Download images and attach them to the notification
+- Rewrite title/subtitle/body
+- Start a Live Activity from the push payload (delivery tracking)
+
+**Reference:** [`example/ios/NotificationServiceExtension/`](example/ios/NotificationServiceExtension/)
+
+Key file: `NotificationService.swift` — routes on `template_id` (`delivery`, `score`, or default pass-through).
+
+### Notification Content Extension
+
+Add a content extension when you want a **custom long-look UI** for a notification category (e.g. delivery progress bar, driver/car images).
+
+**Reference:** [`example/ios/NotificationContentExtension/`](example/ios/NotificationContentExtension/)
+
+- `Info.plist` → `UNNotificationExtensionCategory` must match the category set in the NSE (example: `DELIVERY_CATEGORY`).
+- Storyboard + `NotificationViewController.swift` render attachments and `userInfo` fields.
+
+**Not required** for standard title/body pushes or SDK in-app messages.
+
+### Live Activity extension
+
+Add a Live Activity **Widget Extension** when you want Lock Screen / Dynamic Island UI updated from delivery (or similar) pushes.
+
+**Reference:** [`example/ios/LiveActivityExtension/`](example/ios/LiveActivityExtension/)
+
+Requirements:
+
+- iOS **16.1+** on device (limited simulator support)
+- `NSSupportsLiveActivities` = `true` in **Runner** `Info.plist` (see [`example/ios/Runner/Info.plist`](example/ios/Runner/Info.plist))
+- Shared `ActivityAttributes` type used by **both** the NSE (to call `Activity.request`) and the widget (to define UI)
+- Example shared model: [`example/ios/Shared/DeliveryAttributes.swift`](example/ios/Shared/DeliveryAttributes.swift)
+
+> **Important:** The widget and NSE must use the **same** `ActivityAttributes` struct (same module name and fields). Add the Swift file to both targets via Xcode **Target Membership**.
 
 ---
 
-## 🧾 Step 6: Configure Notification Categories
+## Step-by-step: Notification Service Extension
 
-In `AppDelegate.swift`, `registerNotificationCategories()` creates multiple categories such as:
+### 1. Create the target
 
-- CONFIRMATION_CATEGORY (Yes/No)
-- RESPONSE_CATEGORY (Accept/Reject)
-- TRANSACTION_CATEGORY (Buy/Sell)
-- etc.
+1. Open `ios/Runner.xcworkspace` in Xcode.
+2. **File → New → Target → Notification Service Extension**.
+3. Product name: `NotificationServiceExtension` (or your choice).
+4. Bundle ID pattern: `{your.app.bundle}.NotificationServiceExtension`  
+   Example: `com.example.example.mehios.NotificationServiceExtension`
+5. Deployment target: **15.0** (push-only rich content) or **16.1+** if the NSE will start Live Activities.
 
-This allows interactive push notifications to trigger actions via button taps.
+### 2. Implement the extension
 
----
+Copy or adapt [`NotificationService.swift`](example/ios/NotificationServiceExtension/NotificationService.swift) into the new target.
 
-## 🚀 Step 7: Update `Info.plist`
-
-In both **Runner** and **DeliveryActivity**, add the following permissions:
+Ensure `Info.plist` contains:
 
 ```xml
-<key>NSUserTrackingUsageDescription</key>
-<string>This identifier will be used to track push notifications.</string>
-<key>BGTaskSchedulerPermittedIdentifiers</key>
-<array>
-    <string>com.apple.backgroundfetch</string>
-</array>
+<key>NSExtension</key>
+<dict>
+  <key>NSExtensionPointIdentifier</key>
+  <string>com.apple.usernotifications.service</string>
+  <key>NSExtensionPrincipalClass</key>
+  <string>$(PRODUCT_MODULE_NAME).NotificationService</string>
+</dict>
 ```
 
----
+### 3. Podfile
 
-## 🧪 Step 8: Test Live Activity
+Add a dedicated target so Firebase Messaging is available in the extension if needed:
 
-1. Run your Flutter app on a **real device** (not simulator).
-2. Send a **silent push notification** with `imageUrl` and message parameters.
-3. The app will trigger:
-   ```swift
-   startLiveActivity(userInfo: userInfo)
-   ```
-4. Check the **Lock Screen** or **Dynamic Island** for the activity update.
+```ruby
+target 'NotificationServiceExtension' do
+  use_frameworks!
+  pod 'Firebase/Messaging'
+end
+```
 
----
+Then run:
 
-## 🧹 Step 9: Debug Tips
+```bash
+cd ios && pod install && cd ..
+```
 
-- Use `print()` statements in both Swift files for debugging.
-- Check App Group file access:
-  ```swift
-  FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.mehery.admin.meheryAdmin")
-  ```
-- Make sure images are written successfully before updating Live Activity.
+### 4. Signing
 
----
+- Enable **Push Notifications** for the NSE target (Signing & Capabilities).
+- Use the same team as Runner; bundle ID must be registered in Apple Developer portal.
 
-## 🧩 Step 10: Verify Integration
+### 5. APNS payload
 
-| Test Item | Expected Result |
-|------------|----------------|
-| App Group Sharing | Image loads successfully in widget |
-| Push Notification | Live Activity triggers automatically |
-| CTA Buttons | Invoke Flutter method correctly |
-| Dynamic Island | Displays progress + text updates |
+The server must send `mutable-content: 1` and custom keys your NSE reads (example delivery template):
+
+| Key | Purpose |
+|-----|---------|
+| `template_id` | `delivery`, `score`, or omit for pass-through |
+| `driver_name`, `vehicle_info`, `estimated_time`, `progress` | Delivery / Live Activity |
+| `driver_image_url`, `vehicle_image_url` | Downloaded in NSE |
 
 ---
 
-## ✅ Final Notes
+## Step-by-step: Notification Content Extension
 
-- Live Activities **expire automatically** after a few hours.
-- iOS restricts the number of simultaneous Live Activities per app.
-- Always test on **physical iPhone** with **iOS 16.1+**.
+### 1. Create the target
+
+1. **File → New → Target → Notification Content Extension**.
+2. Bundle ID: `{your.app.bundle}.NotificationContentExtension`.
+3. Deployment target: match Runner (15.0+).
+
+### 2. Configure category
+
+In `Info.plist`, set `UNNotificationExtensionCategory` to the category your NSE assigns (example: `DELIVERY_CATEGORY`).
+
+Reference: [`example/ios/NotificationContentExtension/Info.plist`](example/ios/NotificationContentExtension/Info.plist)
+
+### 3. UI
+
+Implement `UNNotificationContentExtension` in `NotificationViewController.swift` (storyboard or programmatic UI). Read attachments and `userInfo` set by the NSE.
 
 ---
 
-© 2025 Mehery Admin — iOS Integration Documentation
+## Step-by-step: Live Activity widget extension
+
+### 1. Raise deployment target
+
+Live Activities require **iOS 16.1+**. When enabling them:
+
+```ruby
+# ios/Podfile
+platform :ios, '16.0'   # 16.1+ recommended for ActivityKit
+```
+
+Set `IPHONEOS_DEPLOYMENT_TARGET` to **16.1** (or 16.2+) for Runner and extension targets in Xcode.
+
+### 2. Runner Info.plist
+
+Add to `ios/Runner/Info.plist`:
+
+```xml
+<key>NSSupportsLiveActivities</key>
+<true/>
+<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+<true/>
+```
+
+Optional: `UIBackgroundModes` → `remote-notification` (already in the example) for background push handling.
+
+### 3. Create Widget Extension with Live Activity
+
+1. **File → New → Target → Widget Extension**.
+2. Enable **Include Live Activity**.
+3. Bundle ID: `{your.app.bundle}.LiveActivityExtension`.
+4. Implement `ActivityConfiguration` in `LiveActivityExtensionLiveActivity.swift` (see example).
+
+### 4. Share ActivityAttributes
+
+1. Add [`DeliveryAttributes.swift`](example/ios/Shared/DeliveryAttributes.swift) (or your own model) to:
+   - Notification Service Extension target
+   - Live Activity widget target
+   - (Optional) Runner target if the app starts activities in foreground
+2. In `NotificationService.swift`, call `Activity.request(attributes:contentState:pushType:)` when processing delivery pushes (iOS 16.1+).
+3. Use the **same** attribute type in the widget’s `ActivityConfiguration(for:)`.
+
+### 5. Podfile (widget target)
+
+```ruby
+target 'LiveActivityExtensionExtension' do
+  use_frameworks!
+end
+```
+
+Target name may vary (`LiveActivityExtension` vs `LiveActivityExtensionExtension`) — match your Xcode project.
+
+---
+
+## Entitlements summary
+
+| Target | Push-only | + NSE / Content ext | + Live Activity |
+|--------|-----------|---------------------|-----------------|
+| **Runner** | `aps-environment` | Same | + `NSSupportsLiveActivities` in Info.plist |
+| **NSE** | — | Push Notifications (recommended) | Same + ActivityKit usage in code |
+| **Content extension** | — | App Groups **not** required | — |
+| **Widget extension** | — | — | App Groups **optional** (only if sharing files with Runner) |
+
+The example app uses only `aps-environment` on Runner ([`Runner.entitlements`](example/ios/Runner/Runner.entitlements)). **App Groups are not required** for basic push or Live Activities started from the NSE.
+
+Use `production` for `aps-environment` in TestFlight and App Store builds.
+
+---
+
+## Example app layout
+
+```
+example/ios/
+  Runner/                    ← Minimum push setup (AppDelegate, entitlements)
+  NotificationServiceExtension/
+  NotificationContentExtension/
+  LiveActivityExtension/
+  Shared/DeliveryAttributes.swift   ← Share across NSE + widget targets
+```
+
+Compare your project to these folders when debugging signing or missing symbols.
+
+---
+
+## Testing checklist
+
+| Test | Push-only | With NSE | With Live Activity |
+|------|-----------|----------|-------------------|
+| FCM token → SDK registration | ✓ | ✓ | ✓ |
+| Foreground tray notification | ✓ | ✓ | ✓ |
+| In-app popup/banner from poll | ✓ | ✓ | ✓ |
+| Rich images on notification | — | ✓ (mutable-content) | ✓ |
+| Custom long-look UI | — | ✓ (with content ext) | ✓ |
+| Lock Screen / Dynamic Island | — | — | ✓ (device, iOS 16.1+) |
+
+- Test push on a **physical iPhone** for Live Activities and reliable APNs.
+- Confirm `ActivityAuthorizationInfo().areActivitiesEnabled` is true (Settings → Face ID & Passcode → Live Activities).
+- NSE execution time is limited (~30s); keep downloads small.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---------|----------------|
+| NSE never runs | Missing `mutable-content: 1` on APNS payload |
+| Live Activity does not appear | iOS &lt; 16.1, Live Activities disabled, or mismatched `ActivityAttributes` between NSE and widget |
+| Content extension not shown | `categoryIdentifier` ≠ `UNNotificationExtensionCategory` in Info.plist |
+| Pod install fails for extension | Missing `target 'NotificationServiceExtension'` block in Podfile |
+| Duplicate symbol / wrong Activity UI | NSE and widget use different attribute types — align shared Swift file |
+
+---
+
+## Related documentation
+
+- [README.md §1.5 — iOS platform config (push-only)](README.md#15-ios-platform-config)
+- [README.md Part 2 — Dart integration](README.md#part-2--implementation)
+- Apple: [ActivityKit](https://developer.apple.com/documentation/activitykit), [UNNotificationServiceExtension](https://developer.apple.com/documentation/usernotifications/unnotificationserviceextension)

@@ -1,125 +1,86 @@
-# 📱 PushApp-Flutter Android Integration
+# Android integration (mehery_sender plugin)
 
-This Android module powers **custom notifications**, **CTA (button) tracking**, and **live activity updates** for the **PushApp-Flutter SDK**.  
-It extends Firebase Cloud Messaging (FCM) to show **rich, styled notifications**, **progress updates**, and **track user interactions**.
-
----
-
-## 🧩 Flutter ↔ Android Bridge
-
-`MainActivity` defines a `MethodChannel`:
-
-```kotlin
-const channel = MethodChannel('com.mehery.admin/live_activity');
-```
+Android support is delivered as a **Flutter plugin** — no manual Kotlin copy into the host app.
 
 ---
 
-### Available Methods
+## What the plugin provides
 
-| Method | Description |
-|---------|-------------|
-| `showLiveActivity(Map args)` | Display a live or custom notification. |
-| `endLiveActivity(String activityId)` | Dismiss an active notification. |
-| `testImageNotification(String id)` | Display a test notification with an image. |
-| `testImageLoading(String url)` | Check image download capability. |
+| Component | Purpose |
+|-----------|---------|
+| `MeherySenderPlugin` | Auto-registered; wires method + event channels |
+| `mehery_channel` | Native → Dart: `ping`, `trackNotification` |
+| `mesend_event_channel` | CTA / open events → Dart `track()` |
+| `CTATrackingActivity` | Notification action handling (merged manifest) |
+| `CustomNotificationService` | Helper for styled tray layouts (invoked from native code paths) |
+| `LiveActivityMessagingService` | **Not** registered for FCM by default (see below) |
+
+Cross-link: main setup in [README.md §1.4](README.md#14-android-platform-config).
 
 ---
 
-## 🚀 Setup
+## FCM delivery (Rocket / push-only default)
 
-### 1️⃣ Update `AndroidManifest.xml`
+**Default (recommended):** Only **`FlutterFirebaseMessagingService`** (`firebase_messaging`) handles `com.google.firebase.MESSAGING_EVENT`.
 
-Make sure to declare your services and activities:
+- Foreground → `MeSendPushNotificationDisplay` (Dart)
+- Background → `meSendFirebaseMessagingBackgroundHandler` (Dart)
+- Configure in host `main()` per README Part 2
 
-```kotlin
+The plugin manifest **does not** register `LiveActivityMessagingService` for `MESSAGING_EVENT`. A second handler causes **non-deterministic** message delivery.
+
+### Native rich-notification templates (opt-in)
+
+If you need **native** styled notifications (live-activity-style payloads with `message1`/`message2`/`message3`) without Dart handling first, you may **opt in** by adding to your host `AndroidManifest.xml`:
+
+```xml
 <service
-    android:name=".LiveActivityMessagingService"
+    android:name="com.mehery.sender.LiveActivityMessagingService"
     android:exported="false">
     <intent-filter>
         <action android:name="com.google.firebase.MESSAGING_EVENT" />
     </intent-filter>
 </service>
-
-<activity android:name=".CTATrackingActivity" />
 ```
 
----
+**Warning:** Only use this when Dart FCM handlers are disabled or you accept chained/custom routing. Test on a **physical device**.
 
-### 2️⃣ Ensure Firebase Setup
-
-Your app must be configured with Firebase and include a valid **`google-services.json`** file.
+For most integrators (including Rocket push-only), **do not** add this service.
 
 ---
 
-### 3️⃣ Notification Icon
+## Host setup checklist
 
-Ensure `ic_launcher` (or another valid small icon) exists in all drawable density folders.
+1. `google-services.json` in `android/app/`
+2. Google Services + desugaring in Gradle (README §1.4)
+3. `POST_NOTIFICATIONS` permission (Android 13+)
+4. `mehery_sender` in `pubspec.yaml` — plugin merges manifest automatically
+5. Dart: `configureMeSendFirebaseBackgroundInit`, `initializeAndSendToken`, FCM listeners via SDK
 
----
-
-### 4️⃣ Android Version
-
-Requires **Android 8.0 (API 26)** or above for Notification Channels.
-
----
-
-## 🧠 Example Flutter Usage
-
-```kotlin
-import 'package:flutter/services.dart';
-
-const channel = MethodChannel('com.mehery.admin/live_activity');
-
-Future<void> showLiveActivity() async {
-await channel.invokeMethod('showLiveActivity', {
-'activity_id': 'order_123',
-'title': 'Order Progress',
-'message': 'Packing your order',
-'tap_text': 'View Details',
-'progress': 50.0,
-'title_color': '#000000',
-'message_color': '#444444',
-'tap_text_color': '#888888',
-'background_color': '#FFFFFF',
-'imageUrl': 'https://example.com/image.png',
-'bg_color_gradient': '#00BCD4',
-'bg_color_gradient_dir': 'horizontal',
-'align': 'left',
-});
-}
-```
+**Do not** copy Kotlin from `lib/android/` (removed) or duplicate `LiveActivityMessagingService` unless opting in above.
 
 ---
 
-## 🧩 Android Folder Structure
+## Channel names (current)
 
-```kotlin
-android/
- └── app/
-     └── src/main/kotlin/com/mehery/admin/mehery_admin/
-         ├── MainActivity.kt
-         ├── LiveActivityMessagingService.kt
-         ├── CustomNotificationService.kt
-         └── CTATrackingActivity.kt
-```
+| Channel | Name |
+|---------|------|
+| MethodChannel | `mehery_channel` |
+| EventChannel | `mesend_event_channel` |
+
+Legacy names (`com.mehery.admin/live_activity`, `pushapp/methods`) are **not** used by the current plugin.
 
 ---
 
-## 🧾 Summary
+## Troubleshooting
 
-This Android implementation provides:
-
-🔹 Custom, rich notification layouts  
-🔹 CTA button tracking  
-🔹 Seamless Flutter integration via MethodChannel  
-🔹 Live activity updates with progress tracking
-
-Perfect for:
-
-🛒 Order tracking • 🚚 Delivery updates • 🎟 Event countdowns • 📦 Progress notifications
+| Symptom | Check |
+|---------|--------|
+| Duplicate notifications | Two `MESSAGING_EVENT` services in merged manifest |
+| CTA not reaching Dart | `mesend_event_channel` registered; plugin applied |
+| No foreground tray | `MeSendPushNotificationDisplay.ensureInitialized()` after Firebase init |
+| Native ping not firing | Engine must be running; data message with app in background |
 
 ---
 
-📘 **Tip:**  
-You can extend this by modifying `CustomNotificationService` to add new UI elements, or enhancing `LiveActivityMessagingService` to support more notification types.
+© Mehery — Android plugin documentation

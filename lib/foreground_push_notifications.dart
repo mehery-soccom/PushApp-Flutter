@@ -1,9 +1,55 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+import 'sdk_logging.dart';
+
+/// FlutterFire [FirebaseOptions] used when initializing Firebase in the
+/// background isolate. Set once in [main] before
+/// [FirebaseMessaging.onBackgroundMessage].
+FirebaseOptions? _meSendFirebaseBackgroundOptions;
+
+/// Registers [FirebaseOptions] for [meSendFirebaseMessagingBackgroundHandler].
+///
+/// Call in [main] **before** `FirebaseMessaging.onBackgroundMessage(...)`:
+///
+/// ```dart
+/// configureMeSendFirebaseBackgroundInit(
+///   options: DefaultFirebaseOptions.currentPlatform,
+/// );
+/// FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
+/// ```
+void configureMeSendFirebaseBackgroundInit({
+  required FirebaseOptions options,
+}) {
+  _meSendFirebaseBackgroundOptions = options;
+}
+
+/// @nodoc
+@visibleForTesting
+FirebaseOptions? get meSendFirebaseBackgroundOptionsForTest =>
+    _meSendFirebaseBackgroundOptions;
+
+/// @nodoc
+@visibleForTesting
+bool get meSendFirebaseListenersAttachedForTest =>
+    MeSendPushNotificationDisplay.listenersAttachedForTest;
+
+/// @nodoc
+@visibleForTesting
+void resetMeSendFirebaseListenersForTest() {
+  MeSendPushNotificationDisplay.resetListenersForTest();
+}
+
+/// @nodoc
+@visibleForTesting
+void resetMeSendFirebaseBackgroundInitForTest() {
+  _meSendFirebaseBackgroundOptions = null;
+}
 
 /// Parsed MeSend FCM **data** payload (no notification block required).
 class MeSendDataPushPayload {
@@ -132,39 +178,72 @@ class MeSendPushNotificationDisplay {
   static bool _listenersAttached = false;
   static final Set<String> _androidChannelsCreated = <String>{};
 
-  /// Attach FCM listeners immediately after [Firebase.initializeApp].
-  /// Safe to call multiple times; does not require device registration.
+  /// Attaches FCM foreground listeners.
+  ///
+  /// Called automatically by [ensureInitialized]. Host apps should **not** call
+  /// this directly — use [ensureInitialized] after [Firebase.initializeApp]
+  /// so foreground push is handled exactly once.
+  @Deprecated(
+    'FCM listeners attach automatically via '
+    'MeSendPushNotificationDisplay.ensureInitialized().',
+  )
   static void attachFirebaseListeners() {
+    _attachFirebaseListenersOnce();
+  }
+
+  static void _attachFirebaseListenersOnce() {
     if (_listenersAttached) {
-      debugPrint('[MeSend Push] Firebase listeners already attached');
+      meherySenderLog('Firebase listeners already attached', tag: 'Push');
       return;
     }
     _listenersAttached = true;
 
-    debugPrint('[MeSend Push] Attaching Firebase listeners (onMessage)');
+    meherySenderLog('Attaching Firebase listeners (onMessage)', tag: 'Push');
 
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      debugPrint('[MeSend Push][foreground] onMessage received in Dart');
+      meherySenderLog('onMessage received in Dart', tag: 'Push|foreground');
       logPayload(message, 'foreground');
       try {
         await handleRemoteMessage(message, source: 'foreground');
       } catch (error, stackTrace) {
-        debugPrint('[MeSend Push][foreground] handle failed: $error');
-        debugPrint('$stackTrace');
+        meherySenderLog('handle failed: $error', tag: 'Push|foreground');
+        meherySenderLog('$stackTrace', tag: 'Push|foreground');
       }
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('[MeSend Push][opened_from_background] onMessageOpenedApp');
+      meherySenderLog('onMessageOpenedApp', tag: 'Push|opened_from_background');
       logPayload(message, 'opened_from_background');
     });
 
     FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
-        debugPrint('[MeSend Push][opened_from_terminated] getInitialMessage');
+        meherySenderLog('getInitialMessage', tag: 'Push|opened_from_terminated');
         logPayload(message, 'opened_from_terminated');
       }
     });
+  }
+
+  /// Initializes Firebase in a background isolate when needed.
+  ///
+  /// Returns `false` when [configureMeSendFirebaseBackgroundInit] was not
+  /// called before registering [meSendFirebaseMessagingBackgroundHandler].
+  static Future<bool> ensureFirebaseInitializedForBackground() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    if (Firebase.apps.isNotEmpty) {
+      return true;
+    }
+    final options = _meSendFirebaseBackgroundOptions;
+    if (options == null) {
+      meherySenderLog(
+        'Firebase init skipped — call configureMeSendFirebaseBackgroundInit(options: ...) '
+        'in main() before FirebaseMessaging.onBackgroundMessage(...).',
+        tag: 'Push|background',
+      );
+      return false;
+    }
+    await Firebase.initializeApp(options: options);
+    return true;
   }
 
   static void logPayload(RemoteMessage message, String source) {
@@ -184,16 +263,21 @@ class MeSendPushNotificationDisplay {
           'body': notification.body,
         };
       }
-      debugPrint(
-        '[MeSend Push][$source] payload:\n'
-        '${const JsonEncoder.withIndent('  ').convert(payload)}',
+      meherySenderLog(
+        'payload:\n${const JsonEncoder.withIndent('  ').convert(payload)}',
+        tag: 'Push|$source',
       );
     } catch (error, stackTrace) {
-      debugPrint('[MeSend Push][$source] failed to log payload: $error');
-      debugPrint('$stackTrace');
+      meherySenderLog('failed to log payload: $error', tag: 'Push|$source');
+      meherySenderLog('$stackTrace', tag: 'Push|$source');
     }
   }
 
+  /// Initializes local notifications and attaches FCM foreground listeners.
+  ///
+  /// Call once in [main] after [Firebase.initializeApp]. This is the single
+  /// SDK entry point for foreground push handling — host apps must not call
+  /// [attachFirebaseListeners] separately.
   static Future<void> ensureInitialized() async {
     if (_initialized) {
       return;
@@ -211,7 +295,7 @@ class MeSendPushNotificationDisplay {
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings();
     await _plugin.initialize(
-      const InitializationSettings(
+      settings: const InitializationSettings(
         android: androidSettings,
         iOS: iosSettings,
       ),
@@ -224,6 +308,7 @@ class MeSendPushNotificationDisplay {
           ?.requestNotificationsPermission();
     }
 
+    _attachFirebaseListenersOnce();
     _initialized = true;
   }
 
@@ -234,17 +319,17 @@ class MeSendPushNotificationDisplay {
   }) async {
     final payload = MeSendDataPushPayload.fromRemoteMessage(message);
 
-    debugPrint(
-      '[MeSend Push][$source] data-only parsed → '
-      'type=${payload.type}, category=${payload.category}, '
+    meherySenderLog(
+      'data-only parsed → type=${payload.type}, category=${payload.category}, '
       'title=${payload.title}, body=${payload.body}, '
       'showTray=${payload.shouldShowTrayNotification}',
+      tag: 'Push|$source',
     );
 
     if (!payload.shouldShowTrayNotification) {
-      debugPrint(
-        '[MeSend Push][$source] skip tray (in-app type or empty): '
-        '${payload.type}',
+      meherySenderLog(
+        'skip tray (in-app type or empty): ${payload.type}',
+        tag: 'Push|$source',
       );
       return;
     }
@@ -285,19 +370,20 @@ class MeSendPushNotificationDisplay {
     );
 
     await _plugin.show(
-      notificationId,
-      payload.displayTitle,
-      payload.displayBody,
-      NotificationDetails(
+      id: notificationId,
+      title: payload.displayTitle,
+      body: payload.displayBody,
+      notificationDetails: NotificationDetails(
         android: androidDetails,
         iOS: iosDetails,
       ),
       payload: payload.rawData.isEmpty ? null : jsonEncode(payload.rawData),
     );
 
-    debugPrint(
-      '[MeSend Push][$source] tray notification shown '
-      '(data-only=${message.notification == null}): ${payload.displayTitle}',
+    meherySenderLog(
+      'tray notification shown (data-only=${message.notification == null}): '
+      '${payload.displayTitle}',
+      tag: 'Push|$source',
     );
   }
 
@@ -336,6 +422,22 @@ class MeSendPushNotificationDisplay {
   ) {
     final seed = payload.id ?? message.messageId ?? payload.displayTitle;
     return seed.hashCode.abs() % (1 << 31);
+  }
+
+  /// @nodoc
+  @visibleForTesting
+  static bool get listenersAttachedForTest => _listenersAttached;
+
+  /// @nodoc
+  @visibleForTesting
+  static void resetListenersForTest() {
+    _listenersAttached = false;
+  }
+
+  /// @nodoc
+  @visibleForTesting
+  static void markListenersAttachedForTest() {
+    _listenersAttached = true;
   }
 }
 
