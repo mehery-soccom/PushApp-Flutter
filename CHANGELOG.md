@@ -10,6 +10,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.12] - 2026-06-19
+
+Fixes inline in-app slots waiting for tooltips or overlay dismissals.
+
+### Fixed
+
+- **Inline + tooltip:** Poll results split by template type — inline dispatches immediately to placeholder listeners; tooltips and overlays no longer block inline rendering.
+- **Queue lock:** Inline items no longer enter the overlay queue; legacy inline entries in the queue are drained without blocking; inline path releases `_isProcessingQueue` when needed.
+
+### Added
+
+- **`meSendIsInlineInAppTemplateCode` / `meSendIsTooltipInAppTemplateCode`** — template routing helpers in `mesend_parsing.dart`.
+
+### Migration from 0.1.11 → 0.1.12
+
+No host code changes — bump `mehery_sender: ^0.1.12` only.
+
+---
+
 ## [0.1.11] - 2026-06-19
 
 Fixes background FCM handling reported by integration teams: Firebase init across isolates and tray display for data-only pushes.
@@ -222,7 +241,8 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.8...v0.1.10
 [0.1.8]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.0...v0.1.8

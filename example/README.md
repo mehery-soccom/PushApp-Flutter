@@ -82,7 +82,7 @@ Run on **physical devices** (simulators/emulators are insufficient for push toke
 
 | Field | Value |
 |-------|-------|
-| SDK version | 0.1.11 |
+| SDK version | 0.1.12 |
 | Flutter version | |
 | Android device / OS | |
 | iOS device / OS | |

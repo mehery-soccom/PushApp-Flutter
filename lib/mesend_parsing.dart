@@ -195,3 +195,13 @@ MeSendTrackNotificationArgs? meSendParseTrackNotificationArgs(dynamic arguments)
     ctaId: ctaId != null && ctaId.isNotEmpty ? ctaId : null,
   );
 }
+
+/// Whether an in-app template [code] is an inline slot (non-blocking).
+bool meSendIsInlineInAppTemplateCode(String code) {
+  return code.toLowerCase().contains('inline');
+}
+
+/// Whether an in-app template [code] is a tooltip (non-blocking for inline).
+bool meSendIsTooltipInAppTemplateCode(String code) {
+  return code.toLowerCase() == 'tooltip';
+}

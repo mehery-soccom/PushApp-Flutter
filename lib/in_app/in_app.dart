@@ -40,50 +40,49 @@ Future<void> _pollForNotificationData(String userId) async {
           final results = responseData['results'];
 
           if (results is List && results.isNotEmpty) {
-            bool tooltipShown = false;
-            for (final item in results) {
-              try {
-                final style = item["template"]?["style"];
-                final code = style?["code"];
-                final compareId = item["event"]?["event_data"]?["compare"];
-                final messageId = item['messageId'] ?? '';
+            final inlineItems = <Map<String, dynamic>>[];
+            final tooltipItems = <Map<String, dynamic>>[];
+            final overlayItems = <Map<String, dynamic>>[];
 
-                // ✅ Check for tooltip template
-                if (code == "tooltip" && compareId != null) {
-                  final sdk = TooltipSdk();
-                  sdk.processApiResponse({
-                    "results": [item]
-                  });
-                  await Future.delayed(const Duration(seconds: 2));
-                  // Optionally trigger show immediately
-                  tooltipShown = true;
-                  await sdk.showTooltipFor(compareId);
-
-      var deviceId = await Pushapp.getDeviceId();
-      final contactId = "${userId}_$deviceId";
-
-                  // 🔔 Immediately send ACK for the notification
-                  if (messageId.isNotEmpty && contactId.isNotEmpty) {
-                    await ackNotification(contactId, messageId);
-                  }
-
-                  sdk.onTooltipDismissedCallback = () {
-                    sdkPrint("Tooltip dismissed callback fired → processing queue");
-                    _processNextFromQueue();
-                    sdk.onTooltipDismissedCallback = null; // cleanup
-                  };
-                } else {
-                  // Non-tooltip → push to your existing notification queue
-                  _notificationQueue.add(item);
-                  await Future.delayed(Duration(seconds: 1));
-                }
-              } catch (e) {
-                sdkPrint("Error processing result item: $e");
+            for (final raw in results) {
+              final item = meSendCoerceMap(raw);
+              if (item == null) {
+                continue;
+              }
+              final style = meSendCoerceMap(item['template']?['style']);
+              final code = meSendParseString(style?['code']);
+              if (meSendIsTooltipInAppTemplateCode(code) &&
+                  item['event']?['event_data']?['compare'] != null) {
+                tooltipItems.add(item);
+              } else if (meSendIsInlineInAppTemplateCode(code)) {
+                inlineItems.add(item);
+              } else {
+                overlayItems.add(item);
               }
             }
-            if(!tooltipShown) {
-              _processNextFromQueue();
+
+            // Inline slots render in-place and must not wait for tooltips/overlays.
+            for (final item in inlineItems) {
+              try {
+                await _dispatchInlineInAppMessage(item);
+              } catch (e) {
+                sdkPrint('Error dispatching inline in-app: $e');
+              }
             }
+
+            for (final item in tooltipItems) {
+              try {
+                await _showTooltipFromPollResult(item, contactId);
+              } catch (e) {
+                sdkPrint('Error showing tooltip in-app: $e');
+              }
+            }
+
+            for (final item in overlayItems) {
+              _notificationQueue.add(item);
+            }
+
+            _processNextFromQueue();
           } else {
             sdkPrint("No new notifications from poll — keeping existing queue.");
           }
@@ -100,6 +99,52 @@ Future<void> _pollForNotificationData(String userId) async {
   }
 
 
+  Future<void> _dispatchInlineInAppMessage(Map<String, dynamic> data) async {
+    final templateStyle =
+        meSendCoerceMap(data['template']?['style']) ?? <String, dynamic>{};
+    final htmlContent = meSendParseHtmlContent(templateStyle['html']);
+    final placeholderId = meSendParseString(
+      data['event']?['event_data']?['compare'],
+    );
+    final messageId = meSendParseString(data['messageId']);
+    final filterId = meSendParseString(data['filterId']);
+
+    final deviceId = await Pushapp.getDeviceId();
+    final contactId = '${userId}_$deviceId';
+    if (messageId.isNotEmpty && contactId.isNotEmpty) {
+      await ackNotification(contactId, messageId);
+    }
+
+    if (placeholderId.isEmpty || htmlContent.isEmpty) {
+      sdkPrint('Inline in-app skipped — missing placeholder or html');
+      return;
+    }
+
+    sdkPrint('Dispatching inline in-app to placeholder: $placeholderId');
+    _notifyPlaceholder(placeholderId, [htmlContent], messageId, filterId);
+  }
+
+  Future<void> _showTooltipFromPollResult(
+    Map<String, dynamic> item,
+    String contactId,
+  ) async {
+    final compareId = meSendParseString(
+      item['event']?['event_data']?['compare'],
+    );
+    if (compareId.isEmpty) {
+      return;
+    }
+
+    final sdk = TooltipSdk();
+    sdk.processApiResponse({'results': [item]});
+    await sdk.showTooltipFor(compareId);
+
+    final messageId = meSendParseString(item['messageId']);
+    if (messageId.isNotEmpty && contactId.isNotEmpty) {
+      await ackNotification(contactId, messageId);
+    }
+  }
+
   void _onNotificationClosed() {
     _isProcessingQueue = false;
     _processNextFromQueue();
@@ -108,8 +153,26 @@ Future<void> _pollForNotificationData(String userId) async {
   void _processNextFromQueue() {
     sdkPrint("Queue");
     sdkPrint(' queue data ${_notificationQueue.length}');
+
+    while (_notificationQueue.isNotEmpty) {
+      final peek = meSendCoerceMap(_notificationQueue.first);
+      if (peek == null) {
+        _notificationQueue.removeAt(0);
+        continue;
+      }
+      final code = meSendParseString(
+        meSendCoerceMap(peek['template']?['style'])?['code'],
+      );
+      if (meSendIsInlineInAppTemplateCode(code)) {
+        _notificationQueue.removeAt(0);
+        unawaited(_dispatchInlineInAppMessage(peek));
+        continue;
+      }
+      break;
+    }
+
     if (_isProcessingQueue || _notificationQueue.isEmpty) {
-      return; // Either already showing one, or queue is empty
+      return;
     }
 
     _isProcessingQueue = true;
@@ -263,6 +326,8 @@ Future<void> _pollForNotificationData(String userId) async {
       } else {
         sdkPrint("Placeholder data invalid or content missing.");
       }
+      _onNotificationClosed();
+      return;
     }
   }
 

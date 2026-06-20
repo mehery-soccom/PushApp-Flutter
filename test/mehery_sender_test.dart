@@ -522,6 +522,20 @@ void main() {
     });
   });
 
+  group('in-app template routing', () {
+    test('meSendIsInlineInAppTemplateCode matches inline variants', () {
+      expect(meSendIsInlineInAppTemplateCode('inline'), isTrue);
+      expect(meSendIsInlineInAppTemplateCode('INLINE_BANNER'), isTrue);
+      expect(meSendIsInlineInAppTemplateCode('banner'), isFalse);
+    });
+
+    test('meSendIsTooltipInAppTemplateCode matches tooltip only', () {
+      expect(meSendIsTooltipInAppTemplateCode('tooltip'), isTrue);
+      expect(meSendIsTooltipInAppTemplateCode('Tooltip'), isTrue);
+      expect(meSendIsTooltipInAppTemplateCode('inline'), isFalse);
+    });
+  });
+
   group('FCM listener attachment', () {
     tearDown(resetMeSendFirebaseListenersForTest);
 
