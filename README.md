@@ -35,7 +35,7 @@ Add to your app `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.10
+  mehery_sender: ^0.1.11
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
 ```
@@ -46,7 +46,7 @@ dependencies:
 flutter pub get
 ```
 
-### Compatibility matrix (`mehery_sender` 0.1.10)
+### Compatibility matrix (`mehery_sender` 0.1.11)
 
 Host apps within this matrix do **not** need `dependency_overrides`.
 
@@ -75,7 +75,7 @@ Verified with `flutter analyze`, `flutter test`, and example builds on **Flutter
 | `firebase_core` | 4.10.0 – 4.11.0 |
 | `firebase_messaging` | 16.3.0 – 16.4.0 |
 | `flutter_local_notifications` | 22.0.0 |
-| `mehery_sender` | 0.1.10 |
+| `mehery_sender` | 0.1.11 |
 
 New releases document an updated matrix in [CHANGELOG.md](CHANGELOG.md).
 
@@ -376,6 +376,25 @@ FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
 
 ## 2.3 App entry — `lib/main.dart`
 
+**Background handler file** — create `lib/firebase_background_handler.dart`:
+
+```dart
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:mehery_sender/mehery_sender.dart';
+
+import 'firebase_options.dart';
+
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await meSendHandleBackgroundRemoteMessage(
+    message,
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+}
+```
+
+**Main:**
+
 ```dart
 import 'dart:async';
 import 'dart:io';
@@ -385,6 +404,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:mehery_sender/mehery_sender.dart';
 
+import 'firebase_background_handler.dart';
 import 'firebase_options.dart';
 import 'push_service.dart';
 
@@ -393,7 +413,7 @@ Future<void> main() async {
   configureMeSendFirebaseBackgroundInit(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await MeSendPushNotificationDisplay.ensureInitialized();
@@ -407,12 +427,17 @@ Future<void> main() async {
 > FCM listeners automatically after [Firebase.initializeApp]. Do **not** call
 > [MeSendPushNotificationDisplay.attachFirebaseListeners] from host code.
 
-> **Background handler:** Register [meSendFirebaseMessagingBackgroundHandler] with
-> [configureMeSendFirebaseBackgroundInit] so Firebase initializes with your
-> FlutterFire `firebase_options.dart` in the background isolate. Alternatively,
-> define your own top-level handler that calls
-> `Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform)` then
-> [MeSendPushNotificationDisplay.handleRemoteMessage].
+> **Background handler (required pattern):** FCM runs `firebaseMessagingBackgroundHandler` in a **separate Dart isolate**. Module-level statics set in [main] (including [configureMeSendFirebaseBackgroundInit]) are **not** visible there. You **must** use a host top-level handler that calls [meSendHandleBackgroundRemoteMessage] with `DefaultFirebaseOptions.currentPlatform` evaluated **inside** that handler (see `firebase_background_handler.dart` above). Do **not** register [meSendFirebaseMessagingBackgroundHandler] directly unless you wrap it the same way.
+
+> **Data-only background pushes (Android):** When the FCM payload has no `notification` block, the SDK builds the tray notification from `data` fields (`title`/`body` or `message1`/`message2`). The SDK skips `requestNotificationsPermission` in the background isolate (no Activity context); request permission in [main] / `_setupPush` instead.
+
+### Troubleshooting — background push
+
+| Log line | Cause | Fix |
+|----------|--------|-----|
+| `[MeherySender][Push\|background] Firebase init skipped — pass options to meSendHandleBackgroundRemoteMessage` | Background isolate has no [FirebaseOptions] | Add host top-level handler per §2.3 |
+| `NullPointerException` … `requestNotificationsPermission` in background handler | Old SDK called permission APIs without Activity | Upgrade to **0.1.11+**; ensure tray init uses background path |
+| `data-only parsed … showTray=true` but no notification | Crash during local notification show | Upgrade to **0.1.11+**; verify POST_NOTIFICATIONS granted in foreground |
 
 ```dart
 Future<void> _setupPush() async {
@@ -663,7 +688,7 @@ Requires Flutter **≥ 3.38.1** (stable channel in CI). Fix analyzer errors and 
 
 ## Version
 
-`^0.1.10` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
+`^0.1.11` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
 
 **Privacy & data handling:** [PRIVACY.md](PRIVACY.md) (device data, APIs, retention, GDPR/CCPA host checklist).
 

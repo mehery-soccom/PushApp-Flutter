@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:mehery_sender/mehery_sender.dart';
 
+import 'firebase_background_handler.dart';
 import 'firebase_options.dart';
 import 'push_service.dart';
 import 'screens/login_screen.dart';
@@ -15,7 +16,7 @@ Future<void> main() async {
   configureMeSendFirebaseBackgroundInit(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await MeSendPushNotificationDisplay.ensureInitialized();

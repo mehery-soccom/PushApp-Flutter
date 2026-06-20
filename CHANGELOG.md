@@ -10,6 +10,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.11] - 2026-06-19
+
+Fixes background FCM handling reported by integration teams: Firebase init across isolates and tray display for data-only pushes.
+
+### Added
+
+- **`meSendHandleBackgroundRemoteMessage`** — primary API for FCM background isolates; pass `DefaultFirebaseOptions.currentPlatform` from a host top-level handler.
+- **`meSendConfiguredFirebaseBackgroundOptions`** — documents options stored in the current isolate only.
+- **README §2.3 troubleshooting** — isolate static issue, `requestNotificationsPermission` NPE, data-only tray table.
+- **Example** — `example/lib/firebase_background_handler.dart` with recommended registration pattern.
+
+### Fixed
+
+- **Background Firebase init:** `configureMeSendFirebaseBackgroundInit` in [main] no longer implied background isolate configuration; options must be passed into `meSendHandleBackgroundRemoteMessage`.
+- **Background tray (Android):** `ensureTrayDisplayReady(background: true)` skips `requestNotificationsPermission` (no Activity in background isolate — fixes NPE and allows data-only tray notifications).
+- **Data-only FCM:** Tray display uses parsed `data` title/body when no `notification` block is present (existing parser; background path no longer crashes before `show`).
+
+### Changed
+
+- **`meSendFirebaseMessagingBackgroundHandler`** — deprecated for direct registration; use host wrapper + `meSendHandleBackgroundRemoteMessage`.
+- Example `main.dart` registers `firebaseMessagingBackgroundHandler` instead of SDK handler directly.
+
+### Migration from 0.1.10 → 0.1.11
+
+1. Add `lib/firebase_background_handler.dart` (see README §2.3 or example).
+2. Replace `FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler)` with your top-level handler.
+3. No other host changes required if you already used the wrapper pattern from 0.1.10.
+
+---
+
 ## [0.1.10] - 2026-06-19
 
 Integration-hardening release (Rocket AP-1–AP-4): non-throwing init, single Android FCM path, safe template parsing, context guards, and unified SDK logging.
@@ -192,7 +222,8 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.8...v0.1.10
 [0.1.8]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.1.0...v0.1.8
 [0.1.0]: https://github.com/mehery-soccom/mehery_sender_flutter/compare/v0.0.12...v0.1.0

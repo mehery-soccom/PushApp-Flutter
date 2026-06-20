@@ -8,25 +8,65 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'sdk_logging.dart';
 
-/// FlutterFire [FirebaseOptions] used when initializing Firebase in the
-/// background isolate. Set once in [main] before
-/// [FirebaseMessaging.onBackgroundMessage].
+/// FlutterFire [FirebaseOptions] stored in the **current** isolate via
+/// [configureMeSendFirebaseBackgroundInit] (typically [main] only).
+///
+/// Statics are **not** shared with the FCM background isolate. Pass
+/// [FirebaseOptions] into [meSendHandleBackgroundRemoteMessage] from a host
+/// top-level handler — see README §2.3.
 FirebaseOptions? _meSendFirebaseBackgroundOptions;
 
-/// Registers [FirebaseOptions] for [meSendFirebaseMessagingBackgroundHandler].
+/// [FirebaseOptions] stored by [configureMeSendFirebaseBackgroundInit] in this
+/// isolate (for tests / main-isolate use only).
+FirebaseOptions? get meSendConfiguredFirebaseBackgroundOptions =>
+    _meSendFirebaseBackgroundOptions;
+
+/// Stores [FirebaseOptions] in the **current** isolate.
 ///
-/// Call in [main] **before** `FirebaseMessaging.onBackgroundMessage(...)`:
-///
-/// ```dart
-/// configureMeSendFirebaseBackgroundInit(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// FirebaseMessaging.onBackgroundMessage(meSendFirebaseMessagingBackgroundHandler);
-/// ```
+/// Calling this in [main] does **not** configure the FCM background isolate.
+/// Use [meSendHandleBackgroundRemoteMessage] from a host top-level handler.
 void configureMeSendFirebaseBackgroundInit({
   required FirebaseOptions options,
 }) {
   _meSendFirebaseBackgroundOptions = options;
+}
+
+/// Handles an FCM message in a **background isolate**.
+///
+/// Call from a host `@pragma('vm:entry-point')` top-level function so
+/// [FirebaseOptions] are resolved **inside** the background isolate:
+///
+/// ```dart
+/// @pragma('vm:entry-point')
+/// Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+///   await meSendHandleBackgroundRemoteMessage(
+///     message,
+///     options: DefaultFirebaseOptions.currentPlatform,
+///   );
+/// }
+/// ```
+///
+/// In [main]:
+/// ```dart
+/// FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+/// ```
+Future<void> meSendHandleBackgroundRemoteMessage(
+  RemoteMessage message, {
+  required FirebaseOptions options,
+}) async {
+  final ready =
+      await MeSendPushNotificationDisplay.ensureFirebaseInitializedForBackground(
+    options: options,
+  );
+  if (!ready) {
+    return;
+  }
+  meherySenderLog('SDK background handler invoked', tag: 'Push|background');
+  MeSendPushNotificationDisplay.logPayload(message, 'background');
+  await MeSendPushNotificationDisplay.handleRemoteMessage(
+    message,
+    source: 'background',
+  );
 }
 
 /// @nodoc
@@ -175,6 +215,7 @@ class MeSendPushNotificationDisplay {
       FlutterLocalNotificationsPlugin();
 
   static bool _initialized = false;
+  static bool _backgroundTrayReady = false;
   static bool _listenersAttached = false;
   static final Set<String> _androidChannelsCreated = <String>{};
 
@@ -226,23 +267,29 @@ class MeSendPushNotificationDisplay {
 
   /// Initializes Firebase in a background isolate when needed.
   ///
-  /// Returns `false` when [configureMeSendFirebaseBackgroundInit] was not
-  /// called before registering [meSendFirebaseMessagingBackgroundHandler].
-  static Future<bool> ensureFirebaseInitializedForBackground() async {
+  /// Pass [options] from your generated `firebase_options.dart` (evaluated inside
+  /// the background handler). [configureMeSendFirebaseBackgroundInit] in [main]
+  /// alone is not sufficient — statics are not shared across isolates.
+  static Future<bool> ensureFirebaseInitializedForBackground({
+    FirebaseOptions? options,
+  }) async {
     WidgetsFlutterBinding.ensureInitialized();
     if (Firebase.apps.isNotEmpty) {
       return true;
     }
-    final options = _meSendFirebaseBackgroundOptions;
-    if (options == null) {
+    final resolved = options ?? _meSendFirebaseBackgroundOptions;
+    if (resolved == null) {
       meherySenderLog(
-        'Firebase init skipped — call configureMeSendFirebaseBackgroundInit(options: ...) '
-        'in main() before FirebaseMessaging.onBackgroundMessage(...).',
+        'Firebase init skipped — pass options to meSendHandleBackgroundRemoteMessage('
+        'message, options: DefaultFirebaseOptions.currentPlatform) from a host '
+        '@pragma(\'vm:entry-point\') top-level handler. '
+        'configureMeSendFirebaseBackgroundInit in main() does not apply to the '
+        'background isolate. See README §2.3.',
         tag: 'Push|background',
       );
       return false;
     }
-    await Firebase.initializeApp(options: options);
+    await Firebase.initializeApp(options: resolved);
     return true;
   }
 
@@ -278,12 +325,31 @@ class MeSendPushNotificationDisplay {
   /// Call once in [main] after [Firebase.initializeApp]. This is the single
   /// SDK entry point for foreground push handling — host apps must not call
   /// [attachFirebaseListeners] separately.
+  ///
+  /// For the FCM **background** isolate, the SDK uses [ensureTrayDisplayReady]
+  /// instead (no permission prompt, no FCM listener attachment).
   static Future<void> ensureInitialized() async {
-    if (_initialized) {
+    await ensureTrayDisplayReady(background: false);
+    _attachFirebaseListenersOnce();
+    _initialized = true;
+  }
+
+  /// Initializes [FlutterLocalNotificationsPlugin] for tray display.
+  ///
+  /// When [background] is `true` (FCM background isolate), skips Android
+  /// [requestNotificationsPermission] — there is no [Activity] context and the
+  /// call throws. Permission should be requested in [main] / foreground only.
+  @visibleForTesting
+  static Future<void> ensureTrayDisplayReady({bool background = false}) async {
+    if (background) {
+      if (_backgroundTrayReady) {
+        return;
+      }
+    } else if (_initialized) {
       return;
     }
 
-    if (Platform.isIOS) {
+    if (!background && Platform.isIOS) {
       await FirebaseMessaging.instance
           .setForegroundNotificationPresentationOptions(
         alert: true,
@@ -301,15 +367,16 @@ class MeSendPushNotificationDisplay {
       ),
     );
 
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid && !background) {
       await _plugin
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
           ?.requestNotificationsPermission();
     }
 
-    _attachFirebaseListenersOnce();
-    _initialized = true;
+    if (background) {
+      _backgroundTrayReady = true;
+    }
   }
 
   /// Handles [RemoteMessage] in foreground, background, or terminated flows.
@@ -334,6 +401,17 @@ class MeSendPushNotificationDisplay {
       return;
     }
 
+    // Android already displays notification-block payloads when backgrounded.
+    if (Platform.isAndroid &&
+        source == 'background' &&
+        message.notification != null) {
+      meherySenderLog(
+        'notification block present — system may display; skipping local tray',
+        tag: 'Push|background',
+      );
+      return;
+    }
+
     // iOS with a notification block is shown by the system in foreground.
     if (Platform.isIOS &&
         source == 'foreground' &&
@@ -349,7 +427,11 @@ class MeSendPushNotificationDisplay {
     MeSendDataPushPayload payload,
     String source,
   ) async {
-    await ensureInitialized();
+    final background = source == 'background';
+    await ensureTrayDisplayReady(background: background);
+    if (!background) {
+      _initialized = true;
+    }
 
     if (Platform.isAndroid) {
       await _ensureAndroidChannel(payload.androidChannelId, payload.category);
@@ -432,6 +514,13 @@ class MeSendPushNotificationDisplay {
   @visibleForTesting
   static void resetListenersForTest() {
     _listenersAttached = false;
+  }
+
+  /// @nodoc
+  @visibleForTesting
+  static void resetTrayDisplayForTest() {
+    _initialized = false;
+    _backgroundTrayReady = false;
   }
 
   /// @nodoc

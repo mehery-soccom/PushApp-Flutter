@@ -463,13 +463,62 @@ void main() {
 
       configureMeSendFirebaseBackgroundInit(options: options);
 
-      expect(meSendFirebaseBackgroundOptionsForTest, options);
+      expect(meSendConfiguredFirebaseBackgroundOptions, options);
     });
 
-    test('ensureFirebaseInitializedForBackground returns false without config', () async {
+    test('ensureFirebaseInitializedForBackground returns false without options', () async {
       final ready =
           await MeSendPushNotificationDisplay.ensureFirebaseInitializedForBackground();
       expect(ready, isFalse);
+    });
+
+    test('ensureFirebaseInitializedForBackground attempts init when options provided', () async {
+      const options = FirebaseOptions(
+        apiKey: 'test-key',
+        appId: '1:123:android:abc',
+        messagingSenderId: '123',
+        projectId: 'test-project',
+      );
+
+      await expectLater(
+        MeSendPushNotificationDisplay.ensureFirebaseInitializedForBackground(
+          options: options,
+        ),
+        throwsA(isA<PlatformException>()),
+      );
+    });
+
+    test('MeSendDataPushPayload parses data-only title and body', () {
+      final payload = MeSendDataPushPayload.fromRemoteMessage(
+        RemoteMessage(
+          data: const {
+            'type': 'notification',
+            'category': 'CONTENT_CATEGORY',
+            'title': 'Test title',
+            'body': 'Test body',
+          },
+        ),
+      );
+
+      expect(payload.title, 'Test title');
+      expect(payload.body, 'Test body');
+      expect(payload.shouldShowTrayNotification, isTrue);
+    });
+
+    test('MeSendDataPushPayload parses message1 and message2 data fields', () {
+      final payload = MeSendDataPushPayload.fromRemoteMessage(
+        RemoteMessage(
+          data: const {
+            'type': 'notification',
+            'message1': 'Title from message1',
+            'message2': 'Body from message2',
+          },
+        ),
+      );
+
+      expect(payload.title, 'Title from message1');
+      expect(payload.body, 'Body from message2');
+      expect(payload.shouldShowTrayNotification, isTrue);
     });
   });
 

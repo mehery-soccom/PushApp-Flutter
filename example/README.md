@@ -4,7 +4,7 @@ Reference Flutter app for integrating the [mehery_sender](../README.md) (PushApp
 
 ## What it demonstrates
 
-- Firebase init + background handler (`configureMeSendFirebaseBackgroundInit`)
+- Firebase init + background handler (`firebase_background_handler.dart` + `meSendHandleBackgroundRemoteMessage`)
 - FCM/APNs token registration via `Pushapp.initializeAndSendToken`
 - `navigatorObservers` + `navigatorKey` for in-app overlays and page tracking
 - Login flow (`pushApp.login`) and dashboard with `initPage` / `MeSendWidget`
@@ -82,7 +82,7 @@ Run on **physical devices** (simulators/emulators are insufficient for push toke
 
 | Field | Value |
 |-------|-------|
-| SDK version | 0.1.10 |
+| SDK version | 0.1.11 |
 | Flutter version | |
 | Android device / OS | |
 | iOS device / OS | |
