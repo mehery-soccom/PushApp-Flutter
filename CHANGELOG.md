@@ -10,6 +10,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.14] - 2026-06-20
+
+Documentation URL update — no API or behavior changes.
+
+### Changed
+
+- **`documentation` URL** — `pubspec.yaml`, README, and `docs/` now point to the hosted guide at [docs.mehery.com/guide/pushapp/flutter-sdk/](https://docs.mehery.com/guide/pushapp/flutter-sdk/).
+
+### Migration from 0.1.13 → 0.1.14
+
+Bump `mehery_sender: ^0.1.14` only. No code changes.
+
+---
+
 ## [0.1.13] - 2026-06-19
 
 Pub.dev metadata release — no API or behavior changes.
@@ -255,7 +269,8 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.13...HEAD
+[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.10...v0.1.11

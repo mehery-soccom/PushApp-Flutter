@@ -3,7 +3,7 @@
  * Markdown is loaded from GitHub raw (Pages only publishes /docs).
  */
 
-const SDK_VERSION = '0.1.13';
+const SDK_VERSION = '0.1.14';
 
 const GH = {
   owner: 'mehery-soccom',
@@ -11,8 +11,9 @@ const GH = {
   branch: 'main',
 };
 
-/** Published site URLs (after removing custom domain from repo Pages settings). */
+/** Published documentation URLs */
 const SITE_URLS = {
+  meheryDocs: 'https://docs.mehery.com/guide/pushapp/flutter-sdk/',
   githubPages: 'https://mehery-soccom.github.io/PushApp-Flutter/',
 };
 
@@ -249,10 +250,10 @@ function showError(container, message) {
     <div class="error-banner">
       <strong>Could not load docs.</strong> ${message}
       <p style="margin:0.75rem 0 0">
-        If you see a redirect to <code>docs.mehery.com/PushApp-Flutter/</code> (404),
-        remove the custom domain from this repo’s GitHub Pages settings — that domain
-        is used by the main MeherY docs site. Use
-        <a href="${SITE_URLS.githubPages}">${SITE_URLS.githubPages}</a> instead.
+        Content is fetched from
+        <a href="https://github.com/mehery-soccom/PushApp-Flutter" target="_blank" rel="noopener">PushApp-Flutter</a>
+        on GitHub. You can also open the hosted guide at
+        <a href="${SITE_URLS.meheryDocs}">${SITE_URLS.meheryDocs}</a>.
       </p>
     </div>`;
 }

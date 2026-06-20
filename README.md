@@ -2,7 +2,7 @@
 
 Flutter SDK for push notifications, event tracking, and in-app messages (popup, banner, PiP, roadblock).
 
-**Documentation site:** [https://mehery-soccom.github.io/PushApp-Flutter/](https://mehery-soccom.github.io/PushApp-Flutter/) — source in [`docs/`](docs/). Do not use `docs.mehery.com/PushApp-Flutter/` (see [docs/README.md](docs/README.md)).
+**Documentation site:** [https://docs.mehery.com/guide/pushapp/flutter-sdk/](https://docs.mehery.com/guide/pushapp/flutter-sdk/) — hosted on [MeherY docs](https://docs.mehery.com/guide/pushapp/); HTML source in this repo under [`docs/`](docs/) (see [docs/README.md](docs/README.md)).
 
 ---
 ## What Your App Must Add (Quick Checklist)
@@ -37,7 +37,7 @@ Add to your app `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.13
+  mehery_sender: ^0.1.14
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
 ```
@@ -48,7 +48,7 @@ dependencies:
 flutter pub get
 ```
 
-### Compatibility matrix (`mehery_sender` 0.1.13)
+### Compatibility matrix (`mehery_sender` 0.1.14)
 
 Host apps within this matrix do **not** need `dependency_overrides`.
 
@@ -77,7 +77,7 @@ Verified with `flutter analyze`, `flutter test`, and example builds on **Flutter
 | `firebase_core` | 4.10.0 – 4.11.0 |
 | `firebase_messaging` | 16.3.0 – 16.4.0 |
 | `flutter_local_notifications` | 22.0.0 |
-| `mehery_sender` | 0.1.13 |
+| `mehery_sender` | 0.1.14 |
 
 New releases document an updated matrix in [CHANGELOG.md](CHANGELOG.md).
 
@@ -690,7 +690,7 @@ Requires Flutter **≥ 3.38.1** (stable channel in CI). Fix analyzer errors and 
 
 ## Version
 
-`^0.1.13` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
+`^0.1.14` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
 
 **Privacy & data handling:** [PRIVACY.md](PRIVACY.md) (device data, APIs, retention, GDPR/CCPA host checklist).
 
