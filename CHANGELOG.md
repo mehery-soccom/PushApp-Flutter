@@ -10,6 +10,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.15] - 2026-06-20
+
+Documentation URL update — no API or behavior changes.
+
+### Changed
+
+- **`documentation` URL** — `pubspec.yaml`, README, and `docs/` now point to the hosted guide at [docs.mehery.com/guide/pushapp/flutter-sdk/](https://docs.mehery.com/guide/pushapp/flutter-sdk/).
+
+### Migration from 0.1.14 → 0.1.15
+
+Bump `mehery_sender: ^0.1.15` only. No code changes.
+
+---
+
 ## [0.1.14] - 2026-06-20
 
 Documentation URL update — no API or behavior changes.
@@ -23,6 +37,7 @@ Documentation URL update — no API or behavior changes.
 Bump `mehery_sender: ^0.1.14` only. No code changes.
 
 ---
+
 
 ## [0.1.13] - 2026-06-19
 

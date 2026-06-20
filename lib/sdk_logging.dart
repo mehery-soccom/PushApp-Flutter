@@ -16,6 +16,7 @@ void meherySenderLog(String message, {String? tag}) {
   if (!meherySenderApiLoggingEnabled) {
     return;
   }
+
   final prefix = tag == null || tag.isEmpty
       ? meherySenderLogPrefix
       : '$meherySenderLogPrefix[$tag]';

@@ -37,7 +37,7 @@ Add to your app `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.14
+  mehery_sender: ^0.1.15
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
 ```
@@ -48,7 +48,7 @@ dependencies:
 flutter pub get
 ```
 
-### Compatibility matrix (`mehery_sender` 0.1.14)
+### Compatibility matrix (`mehery_sender` 0.1.15)
 
 Host apps within this matrix do **not** need `dependency_overrides`.
 
@@ -68,16 +68,16 @@ Host apps within this matrix do **not** need `dependency_overrides`.
 
 Verified with `flutter analyze`, `flutter test`, and example builds on **Flutter 3.44.1 / Dart 3.12.1**:
 
-| Component | Tested version |
-|-----------|----------------|
-| Flutter | 3.44.1 |
-| Dart | 3.12.1 |
-| Android | minSdk 21, compileSdk 34 |
+| Component | Tested version                  |
+|-----------|---------------------------------|
+| Flutter | 3.44.1                          |
+| Dart | 3.12.1                          |
+| Android | minSdk 21, compileSdk 34        |
 | iOS | 15.0+ (`platform :ios, '15.0'`) |
-| `firebase_core` | 4.10.0 – 4.11.0 |
-| `firebase_messaging` | 16.3.0 – 16.4.0 |
-| `flutter_local_notifications` | 22.0.0 |
-| `mehery_sender` | 0.1.14 |
+| `firebase_core` | 4.10.0 – 4.11.0                 |
+| `firebase_messaging` | 16.3.0 – 16.4.0                 |
+| `flutter_local_notifications` | 22.0.0                          |
+| `mehery_sender` | 0.1.15                          |
 
 New releases document an updated matrix in [CHANGELOG.md](CHANGELOG.md).
 
@@ -690,7 +690,7 @@ Requires Flutter **≥ 3.38.1** (stable channel in CI). Fix analyzer errors and 
 
 ## Version
 
-`^0.1.14` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
+`^0.1.15` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
 
 **Privacy & data handling:** [PRIVACY.md](PRIVACY.md) (device data, APIs, retention, GDPR/CCPA host checklist).
 
