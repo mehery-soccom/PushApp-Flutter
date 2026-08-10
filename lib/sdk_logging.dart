@@ -9,6 +9,14 @@ const String meherySenderLogPrefix = '[MeherySender]';
 /// before SDK init to debug release/profile builds.
 bool meherySenderApiLoggingEnabled = kDebugMode;
 
+/// Alias for [meherySenderApiLoggingEnabled] (legacy host-app name).
+bool get meherySenderConsoleLoggingEnabled =>
+    meherySenderApiLoggingEnabled;
+
+set meherySenderConsoleLoggingEnabled(bool value) {
+  meherySenderApiLoggingEnabled = value;
+}
+
 /// Logs a single line when [meherySenderApiLoggingEnabled] is `true`.
 ///
 /// Optional [tag] adds a subsystem segment, e.g. `[MeherySender][API]`.

@@ -5,6 +5,12 @@ part of mehery_sender;
 bool meherySenderStrictRegistrationMode = false;
 const String kDeviceRegistrationPendingMessage = 'Device registration pending';
 
+/// Mehery PushApp Flutter SDK version sent in device headers.
+const String kPushappSdkVersion = '0.1.16';
+
+/// Framework identifier sent in device headers (`sdk_framework`).
+const String kPushappSdkFramework = 'flutter';
+
 /// Android native code → Dart [MethodChannel] name (ping, trackNotification).
 const String meherySenderMethodChannel = 'mehery_channel';
 

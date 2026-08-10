@@ -428,13 +428,15 @@ void main() {
       try {
         await pushApp.login('user-b');
       } catch (_) {
-        // Network unavailable in unit tests; local switch should still run.
+        // Network unavailable in unit tests; link fails after retries.
       }
 
-      expect(pushApp.userId, 'user-b');
+      // After failed device/link the SDK stays guest in memory and queues retry.
+      expect(pushApp.userId, '');
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('user_id'), isNot('user-a'));
       expect(prefs.getString('session_id'), isNull);
+      expect(prefs.getString('mesend_pending_login_user_id'), 'user-b');
     });
 
     test('login keeps same user for repeat sign-in', () async {

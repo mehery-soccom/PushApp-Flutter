@@ -5,8 +5,69 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:http/http.dart' as http;
 
 import 'sdk_logging.dart';
+
+typedef MeSendNotificationOpenHandler =
+    void Function(Map<String, dynamic> payload);
+
+MeSendNotificationOpenHandler? _meSendNotificationOpenHandler;
+
+/// Internal hook used by the SDK core to consume opened-notification payloads.
+void setMeSendNotificationOpenHandler(MeSendNotificationOpenHandler? handler) {
+  _meSendNotificationOpenHandler = handler;
+}
+
+void _dispatchNotificationOpen(RemoteMessage message) {
+  final handler = _meSendNotificationOpenHandler;
+  if (handler == null) {
+    return;
+  }
+  handler({
+    ...message.data,
+    if (message.messageId != null) 'messageId': message.messageId,
+    'referrer_type': 'notification',
+  });
+}
+
+typedef MeSendNotificationActionHandler =
+    void Function(MeSendPushAction action, Map<String, dynamic> data);
+
+MeSendNotificationActionHandler? _meSendNotificationActionHandler;
+
+/// Internal hook used by the SDK core to consume tray CTA button taps.
+void setMeSendNotificationActionHandler(
+  MeSendNotificationActionHandler? handler,
+) {
+  _meSendNotificationActionHandler = handler;
+}
+
+/// A tray notification CTA button parsed from `title{n}` / `url{n}` /
+/// `action{n}` push data.
+class MeSendPushAction {
+  const MeSendPushAction({
+    required this.slot,
+    required this.title,
+    this.actionId,
+    this.url,
+  });
+
+  /// Slot key (`action1`, `action2`, …), reported as `ctaId` when tracking.
+  ///
+  /// Matches the native `CTATrackingActivity` contract so CTA analytics are
+  /// identical across the Dart and native display paths.
+  final String slot;
+
+  /// Button label shown in the tray.
+  final String title;
+
+  /// Value of `action{n}` (for example `PUSHAPP_BUY`), when the payload sets it.
+  final String? actionId;
+
+  /// URL opened when the button is tapped.
+  final String? url;
+}
 
 /// FlutterFire [FirebaseOptions] stored in the **current** isolate via
 /// [configureMeSendFirebaseBackgroundInit] (typically [main] only).
@@ -101,8 +162,12 @@ class MeSendDataPushPayload {
     this.body,
     this.imageUrl,
     this.clickToken,
+    this.actions = const <MeSendPushAction>[],
     this.rawData = const {},
   });
+
+  /// Android renders at most three notification actions.
+  static const int _maxActions = 3;
 
   final String? id;
   final String? type;
@@ -111,6 +176,7 @@ class MeSendDataPushPayload {
   final String? body;
   final String? imageUrl;
   final String? clickToken;
+  final List<MeSendPushAction> actions;
   final Map<String, dynamic> rawData;
 
   factory MeSendDataPushPayload.fromRemoteMessage(RemoteMessage message) {
@@ -133,14 +199,35 @@ class MeSendDataPushPayload {
         data['message2'],
       ]),
       imageUrl: _firstNonEmpty([
+        _extractPreferredImageUrl(data),
         data['imageUrl'],
         data['image'],
         notification?.android?.imageUrl,
         notification?.apple?.imageUrl,
       ]),
       clickToken: _stringOrNull(data['click_token']),
+      actions: _parseActions(data),
       rawData: Map<String, dynamic>.from(data),
     );
+  }
+
+  static List<MeSendPushAction> _parseActions(Map<String, dynamic> data) {
+    final actions = <MeSendPushAction>[];
+    for (var slot = 1; slot <= _maxActions; slot++) {
+      final title = _stringOrNull(data['title$slot']);
+      if (title == null) {
+        continue;
+      }
+      actions.add(
+        MeSendPushAction(
+          slot: 'action$slot',
+          title: title,
+          actionId: _stringOrNull(data['action$slot']),
+          url: _stringOrNull(data['url$slot']),
+        ),
+      );
+    }
+    return actions;
   }
 
   bool get hasDisplayableContent =>
@@ -207,6 +294,34 @@ class MeSendDataPushPayload {
     }
     return null;
   }
+
+  static String? _extractPreferredImageUrl(Map<String, dynamic> data) {
+    final direct = _firstNonEmpty([
+      data['imageUrl'],
+      data['image_url'],
+      data['image'],
+      data['imageURL'],
+    ]);
+    if (direct != null) {
+      return direct;
+    }
+
+    final imageUrls = data['imageUrls'] ?? data['image_urls'];
+    if (imageUrls is List && imageUrls.isNotEmpty) {
+      return _stringOrNull(imageUrls.first);
+    }
+    if (imageUrls is String && imageUrls.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(imageUrls);
+        if (decoded is List && decoded.isNotEmpty) {
+          return _stringOrNull(decoded.first);
+        }
+      } catch (_) {
+        return imageUrls.trim();
+      }
+    }
+    return null;
+  }
 }
 
 /// Displays tray notifications for FCM messages (notification or data-only).
@@ -255,12 +370,14 @@ class MeSendPushNotificationDisplay {
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       meherySenderLog('onMessageOpenedApp', tag: 'Push|opened_from_background');
       logPayload(message, 'opened_from_background');
+      _dispatchNotificationOpen(message);
     });
 
     FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
         meherySenderLog('getInitialMessage', tag: 'Push|opened_from_terminated');
         logPayload(message, 'opened_from_terminated');
+        _dispatchNotificationOpen(message);
       }
     });
   }
@@ -365,6 +482,7 @@ class MeSendPushNotificationDisplay {
         android: androidSettings,
         iOS: iosSettings,
       ),
+      onDidReceiveNotificationResponse: _onNotificationResponse,
     );
 
     if (Platform.isAndroid && !background) {
@@ -438,12 +556,16 @@ class MeSendPushNotificationDisplay {
     }
 
     final notificationId = _notificationIdFor(message, payload);
+    final styleInformation = await _buildAndroidStyleInformation(payload);
+
     final androidDetails = AndroidNotificationDetails(
       payload.androidChannelId,
       _channelName(payload.category),
       channelDescription: 'MeSend push notifications',
       importance: Importance.high,
       priority: Priority.high,
+      styleInformation: styleInformation,
+      actions: _buildAndroidActions(payload),
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -463,10 +585,127 @@ class MeSendPushNotificationDisplay {
     );
 
     meherySenderLog(
-      'tray notification shown (data-only=${message.notification == null}): '
-      '${payload.displayTitle}',
+      'tray notification shown (data-only=${message.notification == null}, '
+      'buttons=${payload.actions.length}): ${payload.displayTitle}',
       tag: 'Push|$source',
     );
+  }
+
+  static List<AndroidNotificationAction>? _buildAndroidActions(
+    MeSendDataPushPayload payload,
+  ) {
+    if (payload.actions.isEmpty) {
+      return null;
+    }
+    return payload.actions
+        .map(
+          (action) => AndroidNotificationAction(
+            action.slot,
+            action.title,
+            // CTAs open a URL, so the tap must reach the main isolate rather
+            // than onDidReceiveBackgroundNotificationResponse.
+            showsUserInterface: true,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Routes tray CTA button taps to the handler registered by the SDK core.
+  ///
+  /// Body taps are left to the existing FCM `onMessageOpenedApp` flow.
+  static void _onNotificationResponse(NotificationResponse response) {
+    final actionId = response.actionId;
+    if (actionId == null || actionId.isEmpty) {
+      return;
+    }
+
+    final handler = _meSendNotificationActionHandler;
+    if (handler == null) {
+      meherySenderLog(
+        'CTA $actionId tapped but no action handler registered',
+        tag: 'Push|cta',
+      );
+      return;
+    }
+
+    final data = _decodeResponsePayload(response.payload);
+    for (final action in MeSendDataPushPayload._parseActions(data)) {
+      if (action.slot != actionId) {
+        continue;
+      }
+      meherySenderLog(
+        'CTA tapped: ${action.slot} (${action.title}) → ${action.url}',
+        tag: 'Push|cta',
+      );
+      handler(action, data);
+      return;
+    }
+
+    meherySenderLog(
+      'CTA $actionId tapped but not found in payload',
+      tag: 'Push|cta',
+    );
+  }
+
+  static Map<String, dynamic> _decodeResponsePayload(String? payload) {
+    if (payload == null || payload.isEmpty) {
+      return <String, dynamic>{};
+    }
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (error) {
+      meherySenderLog('failed to decode CTA payload: $error', tag: 'Push|cta');
+    }
+    return <String, dynamic>{};
+  }
+
+  static Future<StyleInformation?> _buildAndroidStyleInformation(
+    MeSendDataPushPayload payload,
+  ) async {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+
+    final imageUrl = payload.imageUrl?.trim();
+    if (imageUrl == null || imageUrl.isEmpty) {
+      meherySenderLog('android style: text-only', tag: 'Push|foreground');
+      return null;
+    }
+
+    meherySenderLog('image candidate: $imageUrl', tag: 'Push|image');
+    try {
+      final response = await http.get(Uri.parse(imageUrl));
+      meherySenderLog(
+        'image download status=${response.statusCode}',
+        tag: 'Push|image',
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+
+      final bytes = response.bodyBytes;
+      meherySenderLog(
+        'image bytes downloaded: ${bytes.length}',
+        tag: 'Push|image',
+      );
+      if (bytes.isEmpty) {
+        return null;
+      }
+
+      meherySenderLog('android style: big-picture applied', tag: 'Push|foreground');
+      return BigPictureStyleInformation(
+        ByteArrayAndroidBitmap(bytes),
+        contentTitle: payload.displayTitle,
+        summaryText: payload.displayBody,
+        hideExpandedLargeIcon: true,
+      );
+    } catch (error) {
+      meherySenderLog('image download failed: $error', tag: 'Push|image');
+      return null;
+    }
   }
 
   static Future<void> _ensureAndroidChannel(

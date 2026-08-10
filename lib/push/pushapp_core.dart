@@ -1,17 +1,36 @@
 part of mehery_sender;
 
 mixin PushappCoreMixin on PushappBase {
+  static const _prefCustomerProfilePayloadHashKey =
+      'mesend_customer_profile_payload_hash';
+  static const _prefCustomerProfileSyncedAtMsKey =
+      'mesend_customer_profile_synced_at_ms';
+  static const Duration _customerProfileMinSyncInterval =
+      Duration(hours: 6);
+  static const Duration _appOpenDebounceDuration = Duration(seconds: 2);
+  static const int _networkRetryMaxAttempts = 5;
+  static const Duration _networkRetryBaseDelay = Duration(seconds: 2);
+
+  bool _isCustomerProfileSyncInFlight = false;
+  Timer? _pendingAppOpenTimer;
+  bool _appOpenSentInSession = false;
+  Map<String, dynamic>? _pendingEventReferrer;
+
 Future<void> track(Map<String, dynamic> event) async {
     if (!_ensureDeviceRegistered('track')) {
       return;
     }
     final url = Uri.parse('$serverUrl/pushapp/api/v1/notification/push/track');
 
-    final token = event["t"] ?? event["token"] ?? userId;
-    final eventName = event["event"];
-    final ctaId = event["ctaId"];
+    final tokenRaw = event['t'] ?? event['token'];
+    final token = tokenRaw?.toString().trim();
+    final eventName = event['event']?.toString().trim();
+    final ctaId = event['ctaId'];
 
-    if (token == null || eventName == null) return;
+    if (token == null || token.isEmpty || eventName == null || eventName.isEmpty) {
+      sdkPrint('PushApp: skipped push track — missing token or event');
+      return;
+    }
 
     final body = {
       "t": token,
@@ -84,8 +103,11 @@ Future<void> track(Map<String, dynamic> event) async {
         }
 
         if (!_deviceRegistered) {
+          await _runWithRetry(
+            () => sendTokenToServer('android', token),
+            label: 'device_register',
+          );
           await prefs.setString('device_token', token);
-          await sendTokenToServer('android', token);
         } else if (userId.isNotEmpty) {
           sdkPrint('User already logged in: $userId');
           _setupSocket(userId);
@@ -107,8 +129,11 @@ Future<void> track(Map<String, dynamic> event) async {
         final fcm = fcmToken?.trim();
 
         if (!_deviceRegistered) {
+          await _runWithRetry(
+            () => sendTokenToServer('ios', apns, fcmToken: fcm),
+            label: 'device_register',
+          );
           await prefs.setString('device_token', apns);
-          await sendTokenToServer('ios', apns, fcmToken: fcm);
         } else if (userId.isNotEmpty) {
           sdkPrint('User already logged in: $userId');
           _setupSocket(userId);
@@ -127,7 +152,8 @@ Future<void> track(Map<String, dynamic> event) async {
       }
 
       if (_deviceRegistered) {
-        await sendEvent('app_open', {});
+        _scheduleAppOpen();
+        await _retryPendingLoginIfNeeded();
       }
       return _deviceRegistered;
     } catch (e) {
@@ -216,6 +242,7 @@ Future<void> track(Map<String, dynamic> event) async {
           args.event,
           ctaId: args.ctaId,
         );
+        handleNotificationPayload(call.arguments);
         return null;
       default:
         sdkPrint('PushApp: ignored unknown MethodChannel call: ${call.method}');
@@ -225,14 +252,20 @@ Future<void> track(Map<String, dynamic> event) async {
 
 
   Future<void> trackNotificationEvent(String token, String event, {String? ctaId}) async {
+    final normalizedToken = token.trim();
+    final normalizedEvent = event.trim();
+    if (normalizedToken.isEmpty || normalizedEvent.isEmpty) {
+      sdkPrint('PushApp: skipped trackNotificationEvent — empty token or event');
+      return;
+    }
     if (!_ensureDeviceRegistered('trackNotificationEvent')) {
       return;
     }
     final url = Uri.parse('$serverUrl/pushapp/api/v1/notification/push/track');
 
     final body = {
-      't': token,
-      'event': event,
+      't': normalizedToken,
+      'event': normalizedEvent,
       if (ctaId != null) 'data': {'ctaId': ctaId},
     };
 
@@ -296,10 +329,18 @@ Future<void> track(Map<String, dynamic> event) async {
       sdkPrint("Register ${response.statusCode}");
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        final responseData = jsonDecode(response.body);
-        sdkPrint(response.body);
-        if (responseData['device']['user_id'] != null) {
-          guestId = responseData['device']['user_id'].toString();
+        final rawBody = response.body.trim();
+        if (rawBody.isNotEmpty) {
+          try {
+            final responseData = jsonDecode(rawBody);
+            sdkPrint(rawBody);
+            await _absorbGuestIdFromRegisterResponse(responseData);
+          } catch (e) {
+            // Registration succeeded; tolerate non-JSON/empty response formats.
+            sdkPrint('Register response parse skipped: $e');
+          }
+        } else {
+          sdkPrint('Register response body empty');
         }
         sdkPrint("guest_id: $guestId");
         sdkPrint("Token sent successfully!");
@@ -487,6 +528,7 @@ Future<void> track(Map<String, dynamic> event) async {
   Future<void> _delinkUserFromDevice(
     String userId, {
     bool throwOnFailure = false,
+    bool restoreGuestRegistration = false,
   }) async {
     if (userId.isEmpty) {
       return;
@@ -502,17 +544,22 @@ Future<void> track(Map<String, dynamic> event) async {
     try {
       final deviceId = await getDeviceId();
       final deviceHeaders = await getDeviceHeaders();
+      final sessionId = await getPushSessionId();
       final url = '$serverUrl/pushapp/device/delink';
+      final requestBody = <String, dynamic>{
+        'user_id': userId,
+        'device_id': deviceId,
+      };
+      if (sessionId != null && sessionId.isNotEmpty) {
+        requestBody['session_id'] = sessionId;
+      }
       final response = await _meSendHttpPost(
         Uri.parse(url),
         headers: {
           'Content-Type': 'application/json',
           ...deviceHeaders,
         },
-        body: jsonEncode({
-          'user_id': userId,
-          'device_id': deviceId,
-        }),
+        body: jsonEncode(requestBody),
         label: 'device_delink',
       );
 
@@ -537,6 +584,10 @@ Future<void> track(Map<String, dynamic> event) async {
       sdkPrint('Delink error (continuing): $e');
       await _clearLocalUserSession(userId);
     }
+
+    if (restoreGuestRegistration) {
+      await _attemptGuestReRegistration();
+    }
   }
 
   /// Sends the userId to the server to register user.
@@ -559,7 +610,7 @@ Future<void> track(Map<String, dynamic> event) async {
     this.userId = userId;
 
     if (!_deviceRegistered) {
-      _pendingLoginUserId = userId;
+      await _persistPendingLoginUserId(userId);
       sdkPrint(
         'PushApp: login($userId) queued until device registration completes',
       );
@@ -576,10 +627,23 @@ Future<void> track(Map<String, dynamic> event) async {
       sdkPrint('Same user already linked — refreshing device/link for push session id');
     }
 
-    await _postDeviceLink(
-      userId: userId,
-      setupSocket: !refreshSameUser,
-    );
+    try {
+      await _runWithRetry(
+        () => _postDeviceLink(
+          userId: userId,
+          setupSocket: !refreshSameUser,
+        ),
+        label: 'device_link',
+      );
+      await _clearPendingLoginUserId();
+    } catch (e) {
+      sdkPrint(
+        'device/link failed after retries — staying guest; will retry on next app open: $e',
+      );
+      await _clearLocalUserSession(userId);
+      await _persistPendingLoginUserId(userId);
+      rethrow;
+    }
   }
 
 
@@ -687,13 +751,53 @@ Future<void> ping() async {
     required void Function(bool success) completion,
   }) async {
     if (!_ensureDeviceRegistered('api')) {
+      completion(false);
       return;
     }
-    final url = Uri.parse('$serverUrl/pushapp/api/v1/customer/profile?code='+code);
-    sdkPrint("createOrUpdateCustomerProfile (PUT) → $url");
 
+    if (_isCustomerProfileSyncInFlight) {
+      sdkPrint('Customer profile sync skipped — request already in flight');
+      completion(false);
+      return;
+    }
+
+    final normalizedCode = code.trim();
+    if (normalizedCode.isEmpty) {
+      completion(false);
+      return;
+    }
+
+    final body = <String, dynamic>{
+      'additionalInfo': additionalInfo,
+      'cohorts': cohorts,
+      'code': normalizedCode,
+    };
+    final fingerprintPayload = <String, dynamic>{
+      'additionalInfo': _normalizeJsonValue(additionalInfo),
+      'cohorts': _normalizeJsonValue(cohorts),
+      'code': normalizedCode,
+    };
+    final payloadHash = _fingerprintFromJson(fingerprintPayload);
+    final prefs = await SharedPreferences.getInstance();
+    final lastHash = prefs.getString(_prefCustomerProfilePayloadHashKey) ?? '';
+    final lastSyncedAtMs = prefs.getInt(_prefCustomerProfileSyncedAtMsKey) ?? 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final isWithinCooldown = lastSyncedAtMs > 0 &&
+        (nowMs - lastSyncedAtMs) < _customerProfileMinSyncInterval.inMilliseconds;
+
+    if (lastHash == payloadHash && isWithinCooldown) {
+      sdkPrint('Customer profile sync skipped — unchanged payload within cooldown');
+      completion(true);
+      return;
+    }
+
+    final url = Uri.parse(
+      '$serverUrl/pushapp/api/v1/customer/profile?${Uri(queryParameters: {'code': normalizedCode}).query}',
+    );
+    sdkPrint('createOrUpdateCustomerProfile (PUT) → $url');
+
+    _isCustomerProfileSyncInFlight = true;
     try {
-      // Get device headers
       final deviceHeaders = await getDeviceHeaders();
 
       final requestHeaders = {
@@ -701,17 +805,9 @@ Future<void> ping() async {
         ...deviceHeaders,
       };
 
-      // Build request body
-      final body = <String, dynamic>{
-        'additionalInfo': additionalInfo, // free JSON
-        'cohorts': cohorts,               // free JSON
-        'code': code,
-      };
-
       final jsonBody = jsonEncode(body);
-      sdkPrint("Payload for customer profile (PUT):\n$jsonBody");
+      sdkPrint('Payload for customer profile (PUT):\n$jsonBody');
 
-      // 🔁 PUT API request
       final response = await _meSendHttpPut(
         url,
         headers: requestHeaders,
@@ -719,19 +815,21 @@ Future<void> ping() async {
         label: 'customer_profile',
       );
 
-      sdkPrint("Customer profile (PUT) → Status: ${response.statusCode}");
+      sdkPrint('Customer profile (PUT) → Status: ${response.statusCode}');
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        await prefs.setString(_prefCustomerProfilePayloadHashKey, payloadHash);
+        await prefs.setInt(_prefCustomerProfileSyncedAtMsKey, nowMs);
         completion(true);
       } else {
-        sdkPrint("Failed response: ${response.body}");
+        sdkPrint('Failed response: ${response.body}');
         completion(false);
       }
     } catch (e) {
-      sdkPrint("Customer profile PUT request failed: $e");
-
-
+      sdkPrint('Customer profile PUT request failed: $e');
       completion(false);
+    } finally {
+      _isCustomerProfileSyncInFlight = false;
     }
   }
 
@@ -755,15 +853,28 @@ Future<void> ping() async {
     await _sendEventNow(eventName, eventData);
   }
 
-  Future<void> _sendEventNow(
-    String eventName,
-    Map<String, dynamic> eventData,
+  @override
+  Future<bool> _sendEventNow(
+    String name,
+    Map<String, dynamic> data,
   ) async {
     final prefs = await SharedPreferences.getInstance();
-    var userId = prefs.getString('user_id') ?? '';
+    var resolvedUserId = prefs.getString('user_id') ?? '';
 
-    if (userId == "") {
-      userId = guestId;
+    if (resolvedUserId.isEmpty) {
+      await _hydrateGuestIdFromStorage();
+      resolvedUserId = guestId;
+    }
+
+    if (resolvedUserId.isEmpty) {
+      await _attemptGuestReRegistration();
+      await _hydrateGuestIdFromStorage();
+      resolvedUserId = guestId;
+    }
+
+    if (resolvedUserId.isEmpty) {
+      sdkPrint('PushApp: skipped event $name — no user_id or guest_id');
+      return false;
     }
 
     try {
@@ -776,10 +887,10 @@ Future<void> ping() async {
       sdkPrint(requestHeaders.toString());
 
       final requestBody = {
-        'user_id': userId,
+        'user_id': resolvedUserId,
         'channel_id': channelId,
-        'event_name': eventName,
-        'event_data': eventData,
+        'event_name': name,
+        'event_data': data,
       };
 
       sdkPrint(jsonEncode(requestBody));
@@ -794,15 +905,17 @@ Future<void> ping() async {
       if (response.statusCode == 200) {
         sdkPrint("Event sent successfully!");
         _pollForNotificationData(this.userId);
+        return true;
       } else {
         sdkPrint("Failed to send event: ${response.body}");
+        return false;
       }
 
     } on DeviceRegistrationPendingException {
       rethrow;
     } catch (e) {
       sdkPrint("Error sending event: $e");
-
+      return false;
     }
   }
 
@@ -810,10 +923,14 @@ Future<void> ping() async {
 
   /// Logs out the user and clears local session state for this device.
   Future<void> logout(String userId) async {
+    await _clearPendingLoginUserId();
     if (!_ensureDeviceRegistered('logout')) {
       return;
     }
-    await _delinkUserFromDevice(userId);
+    await _delinkUserFromDevice(
+      userId,
+      restoreGuestRegistration: true,
+    );
   }
 
   /// SharedPreferences key for API session id — matches JSON field `session_id`.
@@ -941,13 +1058,24 @@ Future<void> ping() async {
 
     final headers = <String, String>{
       'X-App-Version': packageInfo.version,
-      'X-SDK-Version': packageInfo.buildNumber,
+      'X-SDK-Version': kPushappSdkVersion,
+      'sdk_framework': kPushappSdkFramework,
+      'sdk_version': kPushappSdkVersion,
       'X-Screen-Resolution': '${mediaData.width.toInt()}x${mediaData.height.toInt()}',
       'X-Device-Orientation': orientation,
       'X-Bundle-ID': packageInfo.packageName,
       'X-Timezone': DateTime.now().timeZoneName,
       'X-Locale': Platform.localeName,
     };
+
+    final normalizedAppId = appId.trim();
+    if (normalizedAppId.isNotEmpty) {
+      headers['X-App-Id'] = normalizedAppId;
+    }
+    final normalizedAppSecret = appSecret.trim();
+    if (normalizedAppSecret.isNotEmpty) {
+      headers['X-App-Key'] = normalizedAppSecret;
+    }
 
     if (Platform.isAndroid) {
       final androidInfo = await PushappBase._deviceInfoPlugin.androidInfo;
@@ -976,5 +1104,223 @@ Future<void> ping() async {
       });
     }
     return headers;
+  }
+
+  /// Pass opened notification/deeplink payloads for one-time app_open attribution.
+  void handleNotificationPayload(
+    dynamic payload, {
+    String sourceType = 'notification',
+  }) {
+    final map = meSendCoerceMap(payload);
+    if (map == null) {
+      return;
+    }
+    final referrer = _extractEventReferrer(map, sourceType: sourceType);
+    if (referrer == null) {
+      return;
+    }
+    _scheduleAppOpen(eventReferrer: referrer, immediate: true);
+  }
+
+  void _scheduleAppOpen({
+    Map<String, dynamic>? eventReferrer,
+    bool immediate = false,
+  }) {
+    if (eventReferrer != null) {
+      _pendingEventReferrer = eventReferrer;
+    }
+
+    if (immediate) {
+      _pendingAppOpenTimer?.cancel();
+      _pendingAppOpenTimer = null;
+      unawaited(_emitAppOpenEvent());
+      return;
+    }
+
+    if (_appOpenSentInSession) {
+      return;
+    }
+
+    _pendingAppOpenTimer?.cancel();
+    _pendingAppOpenTimer = Timer(_appOpenDebounceDuration, () {
+      unawaited(_emitAppOpenEvent());
+    });
+  }
+
+  Future<void> _emitAppOpenEvent() async {
+    _pendingAppOpenTimer?.cancel();
+    _pendingAppOpenTimer = null;
+
+    if (_appOpenSentInSession && _pendingEventReferrer == null) {
+      return;
+    }
+
+    final eventData = <String, dynamic>{};
+    if (_pendingEventReferrer != null) {
+      eventData['event_referrer'] = _pendingEventReferrer;
+      _pendingEventReferrer = null;
+    }
+
+    _appOpenSentInSession = true;
+    await sendEvent('app_open', eventData);
+  }
+
+  Map<String, dynamic>? _extractEventReferrer(
+    Map<String, dynamic> map, {
+    String sourceType = 'notification',
+  }) {
+    final messageId = meSendParseString(
+      map['messageId'] ?? map['message_id'] ?? map['id'],
+    );
+    final campaignId = meSendParseString(
+      map['campaignId'] ?? map['campaign_id'] ?? map['campaign'],
+    );
+    final clickToken = meSendParseString(
+      map['click_token'] ?? map['token'] ?? map['t'],
+    );
+
+    if (messageId.isEmpty && campaignId.isEmpty && clickToken.isEmpty) {
+      return null;
+    }
+
+    final referrer = <String, dynamic>{
+      'referrer_type': sourceType,
+    };
+    if (messageId.isNotEmpty) {
+      referrer['message_id'] = messageId;
+    }
+    if (campaignId.isNotEmpty) {
+      referrer['campaign_id'] = campaignId;
+    }
+    if (clickToken.isNotEmpty) {
+      referrer['click_token'] = clickToken;
+    }
+    return referrer;
+  }
+
+  Future<void> _runWithRetry(
+    Future<void> Function() operation, {
+    required String label,
+  }) async {
+    Object? lastError;
+    for (var attempt = 1; attempt <= _networkRetryMaxAttempts; attempt++) {
+      try {
+        await operation();
+        return;
+      } catch (error) {
+        lastError = error;
+        final canRetry = attempt < _networkRetryMaxAttempts &&
+            _shouldRetryOperationError(error);
+        sdkPrint(
+          '$label attempt $attempt failed${canRetry ? ' — retrying' : ''}: $error',
+        );
+        if (!canRetry) {
+          rethrow;
+        }
+        await Future<void>.delayed(
+          _networkRetryBaseDelay * attempt,
+        );
+      }
+    }
+    throw lastError ?? Exception('$label failed');
+  }
+
+  bool _shouldRetryOperationError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('socket') ||
+        message.contains('timeout') ||
+        message.contains('connection') ||
+        message.contains('failed host lookup') ||
+        message.contains('503') ||
+        message.contains('502') ||
+        message.contains('504');
+  }
+
+  Future<void> _absorbGuestIdFromRegisterResponse(dynamic responseData) async {
+    if (responseData is! Map) {
+      return;
+    }
+    final device = meSendCoerceMap(responseData['device']);
+    final guestUserId = meSendParseString(device?['user_id']);
+    if (guestUserId.isNotEmpty) {
+      await _persistGuestId(guestUserId);
+    }
+  }
+
+  Future<void> _attemptGuestReRegistration() async {
+    if (!_deviceRegistered) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('device_token')?.trim();
+    if (token == null || token.isEmpty) {
+      sdkPrint('Guest re-registration skipped — no stored device token');
+      return;
+    }
+
+    sdkPrint('Attempting guest re-registration after delink/logout');
+    try {
+      if (Platform.isAndroid) {
+        await _refreshGuestRegistration('android', token);
+      } else if (Platform.isIOS) {
+        await _refreshGuestRegistration('ios', token);
+      }
+    } catch (e) {
+      sdkPrint('Guest re-registration failed: $e');
+    }
+  }
+
+  Future<void> _refreshGuestRegistration(String tokenType, String token) async {
+    final url = '$serverUrl/pushapp/api/device/register';
+    final deviceId = await getDeviceId();
+    final deviceHeaders = await getDeviceHeaders();
+    final requestBody = <String, dynamic>{
+      'platform': tokenType,
+      'token': token,
+      'device_id': deviceId,
+      'channel_id': channelId,
+    };
+
+    final response = await _meSendHttpPost(
+      Uri.parse(url),
+      headers: {
+        'Content-Type': 'application/json',
+        ...deviceHeaders,
+      },
+      body: jsonEncode(requestBody),
+      label: 'guest_re_register',
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final responseData = jsonDecode(response.body);
+      await _absorbGuestIdFromRegisterResponse(responseData);
+      sdkPrint('Guest re-registration succeeded: guest_id=$guestId');
+    } else {
+      throw Exception(
+        'Guest re-registration failed: ${response.statusCode} ${response.body}',
+      );
+    }
+  }
+
+  Object? _normalizeJsonValue(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is String || value is num || value is bool) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map(
+        (key, nested) => MapEntry(key.toString(), _normalizeJsonValue(nested)),
+      );
+    }
+    if (value is List) {
+      return value.map(_normalizeJsonValue).toList();
+    }
+    return value.toString();
+  }
+
+  String _fingerprintFromJson(Object? value) {
+    return jsonEncode(_normalizeJsonValue(value));
   }
 }

@@ -49,6 +49,16 @@ Future<void> _pollForNotificationData(String userId) async {
               if (item == null) {
                 continue;
               }
+              if (item['template'] == null) {
+                final messageId = meSendParseString(item['messageId']);
+                sdkPrint(
+                  'Skipping poll item without template (tracking-only): $messageId',
+                );
+                if (messageId.isNotEmpty && contactId.isNotEmpty) {
+                  await ackNotification(contactId, messageId);
+                }
+                continue;
+              }
               final style = meSendCoerceMap(item['template']?['style']);
               final code = meSendParseString(style?['code']);
               if (meSendIsTooltipInAppTemplateCode(code) &&
@@ -145,7 +155,19 @@ Future<void> _pollForNotificationData(String userId) async {
     }
   }
 
-  void _onNotificationClosed() {
+  /// Frees the in-app queue and shows the next overlay.
+  ///
+  /// [latchId] is the [_queueLatchId] captured when the calling overlay was
+  /// displayed. Releases without it free whatever overlay is current, which is
+  /// only safe from code running synchronously with the display decision.
+  void _onNotificationClosed([int? latchId]) {
+    if (!_isProcessingQueue) {
+      return;
+    }
+    if (latchId != null && latchId != _queueLatchId) {
+      // A newer overlay owns the queue; this overlay already reported closure.
+      return;
+    }
     _isProcessingQueue = false;
     _processNextFromQueue();
   }
@@ -176,6 +198,7 @@ Future<void> _pollForNotificationData(String userId) async {
     }
 
     _isProcessingQueue = true;
+    _queueLatchId++;
 
     final nextItem = _notificationQueue.removeAt(0);
     sdkPrint("Showing queued notification: $nextItem");
@@ -261,6 +284,7 @@ Future<void> _pollForNotificationData(String userId) async {
           messageId,
           filterId,
           overlayContext,
+          templateStyle: templateStyle,
         );
       }
     }
@@ -272,6 +296,7 @@ Future<void> _pollForNotificationData(String userId) async {
           messageId,
           filterId,
           overlayContext,
+          templateStyle: templateStyle,
         );
       }
     }
@@ -285,6 +310,7 @@ Future<void> _pollForNotificationData(String userId) async {
           messageId,
           filterId,
           overlayContext,
+          templateStyle: templateStyle,
           align: "top",
         );
       }
@@ -328,6 +354,11 @@ Future<void> _pollForNotificationData(String userId) async {
       }
       _onNotificationClosed();
       return;
+    }
+
+    if (type.isEmpty) {
+      sdkPrint('In-app item has no template type — queue advanced');
+      _onNotificationClosed();
     }
   }
 
@@ -953,11 +984,174 @@ Future<void> _pollForNotificationData(String userId) async {
 
 
 
+  String _resolveNotificationClickUrl(Map<String, dynamic>? style) {
+    if (style == null) {
+      return '';
+    }
+    for (final key in [
+      'notification_url',
+      'notificationUrl',
+      'url',
+      'button1_url',
+      'button2_url',
+    ]) {
+      final value = meSendParseString(style[key]);
+      if (value.isNotEmpty && _meSendLooksLikeClickUrl(value)) {
+        return value;
+      }
+    }
+    return '';
+  }
+
+  bool _meSendLooksLikeClickUrl(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null) {
+      return false;
+    }
+    return uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  Future<void> _installInAppHandleClickBridge(WebViewController controller) {
+    return controller.runJavaScript('''
+      window.handleClick = function(eventType, lab, val) {
+        var message = JSON.stringify({
+          event: eventType,
+          timestamp: Date.now(),
+          data: { url: "", label: lab, value: val }
+        });
+        InAppChannel.postMessage(message);
+      };
+    ''');
+  }
+
+  Future<void> _attachEngagementNotificationClickJs(
+    WebViewController controller,
+    String notificationUrl, {
+    bool allowFullAreaFallback = false,
+  }) async {
+    final url = notificationUrl.trim();
+    if (url.isEmpty || !_meSendLooksLikeClickUrl(url)) {
+      sdkPrint('Engagement click skipped — no valid notification_url');
+      return;
+    }
+
+    sdkPrint('Engagement click wired for notification_url: $url');
+    final escaped = jsonEncode(url);
+    await controller.runJavaScript('''
+      (function() {
+        var cta = $escaped;
+        var selectors = [
+          '.banner-image',
+          '.banner-media-item',
+          '.banner-wrapper',
+          '.banner-text',
+          '.preview-wrapper',
+          '.pop-up-dimensions'
+        ];
+        function attach(node) {
+          if (!node || node.dataset.mesendEngagementClick === '1') {
+            return;
+          }
+          node.dataset.mesendEngagementClick = '1';
+          node.style.cursor = 'pointer';
+          node.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.handleClick === 'function') {
+              window.handleClick('INAPP_OPEN', 'notification_url', cta);
+            }
+          };
+        }
+        var matched = false;
+        selectors.forEach(function(sel) {
+          document.querySelectorAll(sel).forEach(function(node) {
+            matched = true;
+            attach(node);
+          });
+        });
+        if (!matched && $allowFullAreaFallback) {
+          attach(document.body);
+        }
+      })();
+    ''');
+  }
+
+  Future<void> _handleEngagementNotificationClick({
+    required String messageId,
+    required String filterId,
+    required String notificationUrl,
+  }) async {
+    final url = notificationUrl.trim();
+    if (url.isEmpty || !_meSendLooksLikeClickUrl(url)) {
+      return;
+    }
+
+    trackInAppEvent(
+      messageId: messageId,
+      event: 'open',
+      filterId: filterId,
+      ctaId: url,
+      completion: (success) {
+        if (success) {
+          sdkPrint('Tracked in-app open click successfully');
+        } else {
+          sdkPrint('Failed to track in-app open click');
+        }
+      },
+    );
+    await _handleCta(url);
+  }
+
+  String _ensureBannerTransparentHtml(String html) {
+    const css = '''
+<style id="mesend-banner-overrides">
+  /* Editor preview chrome: these carry the white page fill and the centering
+     that box the banner inside its strip. */
+  .preview-wrapper,
+  .pop-up-dimensions {
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  /* The banner surface only needs the layout reset. Its background is set inline
+     from `bg_image_url`, and the shorthand above would reset background-image to
+     none, leaving the banner blank. */
+  .banner-wrapper,
+  .banner-text {
+    box-shadow: none !important;
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .banner-image,
+  .banner-media-item {
+    cursor: pointer;
+  }
+</style>
+''';
+    if (html.contains('<head>')) {
+      return html.replaceFirst('<head>', '<head>$css');
+    }
+    return '$css$html';
+  }
+
   void _showBanner(
       List<dynamic> contentList,
       String messageId,
       String filterId,
       BuildContext context, {
+        Map<String, dynamic>? templateStyle,
         String align = "top",
       }) {
     if (contentList.isEmpty || contentList.first is! String) {
@@ -967,8 +1161,11 @@ Future<void> _pollForNotificationData(String userId) async {
 
     sdkPrint("Show Banner Called");
 
-    final htmlContent = (contentList.first as String)
-        .replaceAll('[[ALIGN]]', align == 'bottom' ? 'banner-bottom' : 'banner-top');
+    final notificationClickUrl = _resolveNotificationClickUrl(templateStyle);
+    final htmlContent = _ensureBannerTransparentHtml(
+      (contentList.first as String)
+          .replaceAll('[[ALIGN]]', align == 'bottom' ? 'banner-bottom' : 'banner-top'),
+    );
 
     final controller = WebViewController();
 
@@ -988,17 +1185,11 @@ Future<void> _pollForNotificationData(String userId) async {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) async {
-            // Inject JS bridge for CTA clicks
-            await controller.runJavaScript('''
-            window.handleClick = function(eventType, lab, val) {
-              var message = JSON.stringify({
-                event: eventType,
-                timestamp: Date.now(),
-                data: { url: "", label: lab, value: val }
-              });
-              InAppChannel.postMessage(message);
-            };
-          ''');
+            await _installInAppHandleClickBridge(controller);
+            await _attachEngagementNotificationClickJs(
+              controller,
+              notificationClickUrl,
+            );
           },
           onNavigationRequest: (request) {
             final url = request.url;
@@ -1066,9 +1257,16 @@ Future<void> _pollForNotificationData(String userId) async {
   }
 
 
-  void _showPopupRoadblock(List<dynamic> contentList,String messageId,String filterId, BuildContext context) {
+  void _showPopupRoadblock(
+    List<dynamic> contentList,
+    String messageId,
+    String filterId,
+    BuildContext context, {
+    Map<String, dynamic>? templateStyle,
+  }) {
     String htmlContent = '';
     String imageUrl = '';
+    final notificationClickUrl = _resolveNotificationClickUrl(templateStyle);
 
     // Determine if the content is HTML or an image
     for (var item in contentList) {
@@ -1127,17 +1325,12 @@ Future<void> _pollForNotificationData(String userId) async {
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (url) async {
-              // CTA bridge
-              await controller.runJavaScript('''
-          window.handleClick = function(eventType, lab, val) {
-            var message = JSON.stringify({
-              event: eventType,
-              timestamp: Date.now(),
-              data: { url: "", label: lab, value: val }
-            });
-            InAppChannel.postMessage(message);
-          };
-        ''');
+              await _installInAppHandleClickBridge(controller);
+              await _attachEngagementNotificationClickJs(
+                controller,
+                notificationClickUrl,
+                allowFullAreaFallback: true,
+              );
 
               // Autoplay video fix
               await controller.runJavaScript('''
@@ -1205,12 +1398,30 @@ Future<void> _pollForNotificationData(String userId) async {
 
       contentWidget = WebViewWidget(controller: controller);
     } else {
-      contentWidget = Image.network(
+      final imageWidget = Image.network(
         imageUrl,
         fit: BoxFit.contain,
         errorBuilder: (context, error, stackTrace) =>
-        const Center(child: Text("Failed to load image")),
+            const Center(child: Text("Failed to load image")),
       );
+      if (notificationClickUrl.isNotEmpty) {
+        contentWidget = GestureDetector(
+          onTap: () async {
+            await _handleEngagementNotificationClick(
+              messageId: messageId,
+              filterId: filterId,
+              notificationUrl: notificationClickUrl,
+            );
+            if (Navigator.canPop(context)) {
+              Navigator.of(context).pop();
+            }
+            _onNotificationClosed();
+          },
+          child: imageWidget,
+        );
+      } else {
+        contentWidget = imageWidget;
+      }
     }
 
     // Show dialog with the WebView or image
@@ -1219,7 +1430,7 @@ Future<void> _pollForNotificationData(String userId) async {
       barrierDismissible: false,
       builder: (BuildContext context) {
         return Scaffold(
-          backgroundColor: Colors.black, // full screen dark background
+          backgroundColor: Colors.black54,
           body: Stack(
             children: [
               // Fullscreen WebView
@@ -1266,10 +1477,12 @@ Future<void> _pollForNotificationData(String userId) async {
       List<dynamic> contentList,
       String messageId,
       String filterId,
-      BuildContext context,
-      ) async {
+      BuildContext context, {
+      Map<String, dynamic>? templateStyle,
+      }) async {
     String htmlContent = '';
     String imageUrl = '';
+    final notificationClickUrl = _resolveNotificationClickUrl(templateStyle);
 
     // Determine if the content is HTML or an image
     for (var item in contentList) {
@@ -1333,17 +1546,12 @@ Future<void> _pollForNotificationData(String userId) async {
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (url) async {
-              // Re-define JS helper function
-              await controller.runJavaScript('''
-              window.handleClick = function(eventType, lab, val) {
-                var message = JSON.stringify({
-                  event: eventType,
-                  timestamp: Date.now(),
-                  data: { url: "", label: lab, value: val }
-                });
-                InAppChannel.postMessage(message);
-              };
-            ''');
+              await _installInAppHandleClickBridge(controller);
+              await _attachEngagementNotificationClickJs(
+                controller,
+                notificationClickUrl,
+                allowFullAreaFallback: true,
+              );
 
               // Autoplay, Controls, and Fullscreen Fix (JS injection)
               await controller.runJavaScript('''
@@ -1398,13 +1606,30 @@ Future<void> _pollForNotificationData(String userId) async {
 
       contentWidget = WebViewWidget(controller: controller);
     } else {
-      // ... (Image handling remains the same)
-      contentWidget = Image.network(
+      final imageWidget = Image.network(
         imageUrl,
         fit: BoxFit.contain,
         errorBuilder: (context, error, stackTrace) =>
-        const Center(child: Text("Failed to load image")),
+            const Center(child: Text("Failed to load image")),
       );
+      if (notificationClickUrl.isNotEmpty) {
+        contentWidget = GestureDetector(
+          onTap: () async {
+            await _handleEngagementNotificationClick(
+              messageId: messageId,
+              filterId: filterId,
+              notificationUrl: notificationClickUrl,
+            );
+            if (Navigator.canPop(context)) {
+              Navigator.of(context).pop();
+            }
+            _onNotificationClosed();
+          },
+          child: imageWidget,
+        );
+      } else {
+        contentWidget = imageWidget;
+      }
     }
 
     // Show the bottom sheet
@@ -1471,22 +1696,38 @@ Future<void> _pollForNotificationData(String userId) async {
 
     try {
       final decoded = jsonDecode(body);
-      final event = "cta";
-      final ctaId = decoded["data"]?["value"] ?? "";
-
-      if (ctaId.isEmpty) return;
-
-      // Handle CTA
-      _handleCta(ctaId);
-
-      // Track event (equivalent to PushApp.shared.trackInAppEvent)
-      trackInAppEvent(messageId: messageId, event: event, filterId: filterId, ctaId: ctaId,completion: (success) {
-        if (success) {
-          sdkPrint("Tracked in-app event successfully");
-        } else {
-          sdkPrint("Failed to track in-app event");
-        }
+      if (decoded is! Map) {
+        return;
       }
+
+      final eventType = meSendParseString(decoded['event']).toUpperCase();
+      final ctaId = meSendParseString(decoded['data']?['value']);
+      if (ctaId.isEmpty) {
+        return;
+      }
+
+      if (eventType == 'INAPP_OPEN' || eventType == 'OPEN') {
+        await _handleEngagementNotificationClick(
+          messageId: messageId,
+          filterId: filterId,
+          notificationUrl: ctaId,
+        );
+        return;
+      }
+
+      await _handleCta(ctaId);
+      trackInAppEvent(
+        messageId: messageId,
+        event: 'cta',
+        filterId: filterId,
+        ctaId: ctaId,
+        completion: (success) {
+          if (success) {
+            sdkPrint('Tracked in-app CTA successfully');
+          } else {
+            sdkPrint('Failed to track in-app CTA');
+          }
+        },
       );
     } catch (e) {
       debugPrint("❌ Failed to parse JS message: $e");

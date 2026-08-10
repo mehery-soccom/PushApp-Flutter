@@ -10,6 +10,10 @@ abstract class PushappBase {
 
   static const _prefDeviceRegistrationCompleteKey =
       'mesend_device_registration_complete';
+  static const _prefAppInstallSentKey = 'mesend_app_install_sent';
+
+  static const _prefGuestUserIdKey = 'mesend_guest_user_id';
+  static const _prefPendingLoginUserIdKey = 'mesend_pending_login_user_id';
 
   late final String serverUrl;
   String? _wsUrlOverride;
@@ -43,11 +47,22 @@ abstract class PushappBase {
   List<Map<String, dynamic>> _notificationQueue = [];
   bool _isProcessingQueue = false;
 
+  /// Identifies the overlay that currently owns the in-app queue slot.
+  ///
+  /// An overlay can report closure from several places — an in-content CTA, the
+  /// close button, and the dialog route completing — so each release carries the
+  /// id it was displayed with and stale ones are ignored. Without it a late
+  /// callback could release a slot a newer overlay already took, showing two
+  /// messages at once and skipping one.
+  int _queueLatchId = 0;
+
   var mockJson = r'''
 ''';
 
   final String tenant;
   final String channelId;
+  final String appId;
+  final String appSecret;
   bool sandbox = false;
 
   /// When `true`, API/WebSocket hosts use **`.co.in`** (internal development only).
@@ -114,6 +129,8 @@ abstract class PushappBase {
   PushappBase._({
     required this.tenant,
     required this.channelId,
+    required this.appId,
+    required this.appSecret,
     required this.sandbox,
     required this.developmentHost,
     String? serverUrlOverride,
@@ -132,7 +149,7 @@ abstract class PushappBase {
     }
   }
 
-  Future<void> _sendEventNow(String name, Map<String, dynamic> data);
+  Future<bool> _sendEventNow(String name, Map<String, dynamic> data);
   Future<void> _loginNow(String userId);
   Future<void> _pollForNotificationData(String userId);
 
@@ -175,6 +192,8 @@ abstract class PushappBase {
       return;
     }
 
+    await _sendAppInstallIfNeeded();
+
     final events = List<({String name, Map<String, dynamic> data})>.from(
       _pendingEvents,
     );
@@ -183,10 +202,72 @@ abstract class PushappBase {
       await _sendEventNow(event.name, event.data);
     }
 
-    final pendingLogin = _pendingLoginUserId;
+    await _retryPendingLoginIfNeeded();
+  }
+
+  /// Retries a queued/failed [login] while staying guest if link still fails.
+  Future<void> _retryPendingLoginIfNeeded() async {
+    if (!_deviceRegistered) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final linkedUserId = prefs.getString('user_id') ?? '';
+    if (linkedUserId.isNotEmpty) {
+      await _clearPendingLoginUserId();
+      return;
+    }
+
+    final pending =
+        (_pendingLoginUserId ?? prefs.getString(_prefPendingLoginUserIdKey))
+            ?.trim();
     _pendingLoginUserId = null;
-    if (pendingLogin != null && pendingLogin.isNotEmpty) {
-      await _loginNow(pendingLogin);
+    if (pending == null || pending.isEmpty) {
+      return;
+    }
+
+    sdkPrint('Retrying pending login($pending)');
+    try {
+      await _loginNow(pending);
+    } catch (e) {
+      sdkPrint('Pending login retry failed — remaining guest: $e');
+    }
+  }
+
+  Future<void> _persistPendingLoginUserId(String userId) async {
+    final trimmed = userId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    _pendingLoginUserId = trimmed;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefPendingLoginUserIdKey, trimmed);
+  }
+
+  Future<void> _clearPendingLoginUserId() async {
+    _pendingLoginUserId = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefPendingLoginUserIdKey);
+  }
+
+  Future<void> _sendAppInstallIfNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadySent = prefs.getBool(_prefAppInstallSentKey) ?? false;
+    if (alreadySent) {
+      return;
+    }
+
+    final sent = await _sendEventNow(
+      'app_install',
+      {
+        'source': 'sdk',
+      },
+    );
+    if (sent) {
+      await prefs.setBool(_prefAppInstallSentKey, true);
+      sdkPrint('app_install sent and marked complete');
+    } else {
+      sdkPrint('app_install send failed/skipped; will retry later');
     }
   }
 
@@ -194,6 +275,7 @@ abstract class PushappBase {
     final prefs = await SharedPreferences.getInstance();
     _deviceRegistered =
         prefs.getBool(_prefDeviceRegistrationCompleteKey) ?? false;
+    await _hydrateGuestIdFromStorage();
     if (_deviceRegistered) {
       sdkPrint('Device registration complete (restored from cache)');
       _emitRegistrationState(
@@ -215,6 +297,27 @@ abstract class PushappBase {
   void _emitTokenRefreshed() {
     _emitRegistrationState(MeSendDeviceRegistrationState.tokenRefreshed);
   }
+
+  Future<void> _hydrateGuestIdFromStorage() async {
+    if (guestId.isNotEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_prefGuestUserIdKey);
+    if (stored != null && stored.trim().isNotEmpty) {
+      guestId = stored.trim();
+    }
+  }
+
+  Future<void> _persistGuestId(String id) async {
+    final trimmed = id.trim();
+    guestId = trimmed;
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefGuestUserIdKey, trimmed);
+  }
 }
 
 class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
@@ -222,6 +325,8 @@ class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
 
   factory Pushapp({
     required String identifier,
+    String appId = '',
+    String appSecret = '',
     bool sandbox = false,
     bool developmentHost = false,
     String? serverUrlOverride,
@@ -230,6 +335,8 @@ class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
     return Pushapp._(
       tenant: parts.tenant,
       channelId: parts.channelId,
+      appId: appId,
+      appSecret: appSecret,
       sandbox: sandbox,
       developmentHost: developmentHost,
       serverUrlOverride: serverUrlOverride,
@@ -239,17 +346,27 @@ class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
   Pushapp._({
     required String tenant,
     required String channelId,
+    required String appId,
+    required String appSecret,
     required bool sandbox,
     required bool developmentHost,
     String? serverUrlOverride,
   }) : super._(
           tenant: tenant,
           channelId: channelId,
+          appId: appId,
+          appSecret: appSecret,
           sandbox: sandbox,
           developmentHost: developmentHost,
           serverUrlOverride: serverUrlOverride,
         ) {
     PushappBase._activeInstance = this;
+
+    setMeSendNotificationOpenHandler((payload) {
+      handleNotificationPayload(payload);
+    });
+
+    setMeSendNotificationActionHandler(_handlePushNotificationAction);
 
     if (!Platform.isIOS) {
       const eventChannel = EventChannel(meherySenderEventChannel);
@@ -288,5 +405,45 @@ class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
       }
     }
     meSendRouteObserver.attachSDK(this);
+  }
+
+  /// Tracks a tray CTA button tap and opens its URL.
+  ///
+  /// Mirrors the native `CTATrackingActivity` contract — event `cta` with the
+  /// slot name (`action1`, …) as `ctaId` — so both display paths report the
+  /// same analytics.
+  Future<void> _handlePushNotificationAction(
+    MeSendPushAction action,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final clickToken = meSendParseString(data['click_token']).trim();
+      if (clickToken.isEmpty) {
+        sdkPrint('PushApp: push CTA tap without click_token — not tracked');
+      } else {
+        await trackNotificationEvent(clickToken, 'cta', ctaId: action.slot);
+      }
+
+      final url = action.url?.trim();
+      if (url == null || url.isEmpty) {
+        return;
+      }
+      final uri = Uri.tryParse(url);
+      if (uri == null) {
+        sdkPrint('PushApp: unparsable push CTA URL: $url');
+        return;
+      }
+      if (!meSendIsCtaUrlAllowed(uri)) {
+        sdkPrint('PushApp: blocked push CTA URL (not allowed): $uri');
+        return;
+      }
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        sdkPrint('PushApp: cannot launch push CTA URL: $uri');
+      }
+    } catch (e) {
+      sdkPrint('PushApp: push CTA handling failed: $e');
+    }
   }
 }

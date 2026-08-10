@@ -10,6 +10,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.16] - 2026-07-10
+ 
+SDK fixes - registration reliability, and in-app/push UX improvements.
+
+### Added
+
+- **`sdk_framework` / `sdk_version` headers** — device registration and API calls send `sdk_framework: flutter` and the package version for backend analytics.
+- **`appId` / `appSecret` (`X-App-Id`, `X-App-Key`)** —  `Pushapp(...)` constructor args for tenant-scoped device headers.
+- **Profile update dedupe guard** — skips redundant `createOrUpdateCustomerProfile` calls when the payload fingerprint is unchanged within the cooldown window.
+- **Delink `session_id`** — user delink API includes `session_id` from the current device session.
+- **Guest ID persistence + post-delink re-register** — stores guest user id locally; after logout with `restoreGuestRegistration: true`, re-registers as guest automatically.
+- **Register/link retry** — device register and user link retry up to 3 times with exponential backoff.
+- **Debounced `app_open`** — coalesces rapid foreground events; optional `event_referrer` from notification open payload.
+- **Foreground Android big-picture notifications** — rich image in the tray when the push payload includes an image URL.
+- **Banner transparency + image click** — transparent banner HTML background; tapping the banner image sends engagement track + redirect.
+- **Roadblock dim overlay** — semi-transparent backdrop behind roadblock templates.
+- **`meherySenderConsoleLoggingEnabled`** — alias for `meherySenderApiLoggingEnabled`.
+
+### Fixed
+
+- **In-app engagement click** — banner, roadblock, and bottomsheet templates with `notification_url` now send in-app track event **`open`** and redirect on tap (explicit CTA buttons still use **`cta`**).
+- **Tracking-only poll items** — poll results with `template: null` are no longer queued as overlays (they blocked the in-app queue). They are acked immediately instead.
+- **Empty template type** — when a queued item has no renderable template type, the overlay queue now advances instead of staying locked.
+- **Push track without token** — native/EventChannel track calls skip when token or event is empty.
+- **Profile update payload** — sends original `additionalInfo` / `cohorts`; normalization used only for dedupe fingerprint.
+
+### Migration from 0.1.15 → 0.1.16
+
+1. **pubspec** — bump `mehery_sender: ^0.1.16`.
+2. **Optional app credentials** — pass `appId` and `appSecret` to `Pushapp(...)` if your backend expects `X-App-Id` / `X-App-Key` headers (defaults to empty; no change required for existing hosts).
+3. **Guest logout** — use `logout(restoreGuestRegistration: true)` when you want anonymous guest re-registration after sign-out.
+4. **Debug logging** — `meherySenderConsoleLoggingEnabled` is an alias for `meherySenderApiLoggingEnabled`; either name works.
+5. No other host changes required.
+
+---
+
 ## [0.1.15] - 2026-06-20
 
 Documentation URL update — no API or behavior changes.
