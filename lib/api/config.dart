@@ -6,7 +6,7 @@ bool meherySenderStrictRegistrationMode = false;
 const String kDeviceRegistrationPendingMessage = 'Device registration pending';
 
 /// Mehery PushApp Flutter SDK version sent in device headers.
-const String kPushappSdkVersion = '0.1.16';
+const String kPushappSdkVersion = '0.1.17';
 
 /// Framework identifier sent in device headers (`sdk_framework`).
 const String kPushappSdkFramework = 'flutter';

@@ -671,8 +671,11 @@ class MeSendPushNotificationDisplay {
 
     final imageUrl = payload.imageUrl?.trim();
     if (imageUrl == null || imageUrl.isEmpty) {
-      meherySenderLog('android style: text-only', tag: 'Push|foreground');
-      return null;
+      meherySenderLog('android style: big-text applied', tag: 'Push|foreground');
+      return BigTextStyleInformation(
+        payload.displayBody,
+        contentTitle: payload.displayTitle,
+      );
     }
 
     meherySenderLog('image candidate: $imageUrl', tag: 'Push|image');
@@ -683,7 +686,14 @@ class MeSendPushNotificationDisplay {
         tag: 'Push|image',
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return null;
+        meherySenderLog(
+          'android style: big-text fallback (image HTTP ${response.statusCode})',
+          tag: 'Push|foreground',
+        );
+        return BigTextStyleInformation(
+          payload.displayBody,
+          contentTitle: payload.displayTitle,
+        );
       }
 
       final bytes = response.bodyBytes;
@@ -692,7 +702,14 @@ class MeSendPushNotificationDisplay {
         tag: 'Push|image',
       );
       if (bytes.isEmpty) {
-        return null;
+        meherySenderLog(
+          'android style: big-text fallback (empty image)',
+          tag: 'Push|foreground',
+        );
+        return BigTextStyleInformation(
+          payload.displayBody,
+          contentTitle: payload.displayTitle,
+        );
       }
 
       meherySenderLog('android style: big-picture applied', tag: 'Push|foreground');
@@ -704,7 +721,14 @@ class MeSendPushNotificationDisplay {
       );
     } catch (error) {
       meherySenderLog('image download failed: $error', tag: 'Push|image');
-      return null;
+      meherySenderLog(
+        'android style: big-text fallback (image download failed)',
+        tag: 'Push|foreground',
+      );
+      return BigTextStyleInformation(
+        payload.displayBody,
+        contentTitle: payload.displayTitle,
+      );
     }
   }
 

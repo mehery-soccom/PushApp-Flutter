@@ -79,6 +79,7 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                     .setSmallIcon(R.drawable.ic_notification)
                     .setContentTitle(title)
                     .setContentText(message)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(message))
                     .setAutoCancel(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
 

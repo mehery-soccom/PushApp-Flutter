@@ -10,6 +10,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.17] - 2026-08-18
+
+Android tray notifications expand to show the full body text.
+
+### Added
+
+- **Android BigText tray style** — text-only pushes expand to show the full notification body. Image payloads still use BigPicture; BigText is used if the image cannot be loaded.
+
+### Migration from 0.1.16 → 0.1.17
+
+1. **pubspec** — bump `mehery_sender: ^0.1.17`.
+2. No other host changes required.
+
+---
+
 ## [0.1.16] - 2026-07-10
  
 SDK fixes - registration reliability, and in-app/push UX improvements.
@@ -320,7 +335,9 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.17...HEAD
+[0.1.17]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.16...v0.1.17
+[0.1.16]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.15...v0.1.16
 [0.1.14]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.11...v0.1.12
