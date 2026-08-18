@@ -16,7 +16,7 @@ Android tray notifications expand to show the full body text.
 
 ### Added
 
-- **Android BigText tray style** — text-only pushes expand to show the full notification body. Image payloads still use BigPicture; BigText is used if the image cannot be loaded.
+- **Android BigText tray style** — text-only pushes expand to show the full notification body.
 
 ### Migration from 0.1.16 → 0.1.17
 
