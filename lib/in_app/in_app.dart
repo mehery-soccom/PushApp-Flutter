@@ -8,9 +8,14 @@ Future<void> _pollForNotificationData(String userId) async {
     }
     sdkPrint("poll calling");
     try {
+      final pollUserId = userId.trim().isNotEmpty ? userId.trim() : this.userId.trim();
+      if (pollUserId.isEmpty) {
+        sdkPrint('Skipping in-app poll — no user id yet');
+        return;
+      }
       var deviceId = await Pushapp.getDeviceId();
       final deviceHeaders = await getDeviceHeaders();
-      final contactId = "${userId}_$deviceId";
+      final contactId = "${pollUserId}_$deviceId";
       sdkPrint(contactId);
 
       final url = '$serverUrl/pushapp/api/v1/notification/in-app/poll';
@@ -1146,6 +1151,24 @@ Future<void> _pollForNotificationData(String userId) async {
     return '$css$html';
   }
 
+  /// Same close control on banner, popup, and bottomsheet: 24px circle, 12px X.
+  Widget _inAppCloseButton({required VoidCallback onPressed}) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: const BoxDecoration(
+        color: Colors.black54,
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+        icon: const Icon(Icons.close, color: Colors.white, size: 12),
+        onPressed: onPressed,
+      ),
+    );
+  }
+
   void _showBanner(
       List<dynamic> contentList,
       String messageId,
@@ -1226,25 +1249,16 @@ Future<void> _pollForNotificationData(String userId) async {
                 Positioned(
                   top: 4,
                   right: 4,
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.black54,
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 18),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () {
-                        trackInAppEvent(
-                          messageId: messageId,
-                          event: "dismissed",
-                          completion: (success) {},
-                        );
-                        Navigator.of(context).pop();
-                        _onNotificationClosed();
-                      },
-                    ),
+                  child: _inAppCloseButton(
+                    onPressed: () {
+                      trackInAppEvent(
+                        messageId: messageId,
+                        event: "dismissed",
+                        completion: (success) {},
+                      );
+                      Navigator.of(context).pop();
+                      _onNotificationClosed();
+                    },
                   ),
                 ),
               ],
@@ -1442,27 +1456,16 @@ Future<void> _pollForNotificationData(String userId) async {
           Positioned(
             top: 40,
             right: 20,
-            child: Container(
-              width: 24, // make circle smaller
-              height: 24,
-              decoration: const BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                padding: EdgeInsets.zero, // removes extra space inside button
-                constraints: const BoxConstraints(), // removes default min size (48x48)
-                icon: const Icon(Icons.close, color: Colors.white, size: 12),
-                onPressed: () {
-                  trackInAppEvent(
-                    messageId: messageId,
-                    event: "dismissed",
-                    completion: (success) {},
-                  );
-                  Navigator.of(context).pop();
-                  _onNotificationClosed();
-                },
-              ),
+            child: _inAppCloseButton(
+              onPressed: () {
+                trackInAppEvent(
+                  messageId: messageId,
+                  event: "dismissed",
+                  completion: (success) {},
+                );
+                Navigator.of(context).pop();
+                _onNotificationClosed();
+              },
             ),
           )
           ],
@@ -1660,23 +1663,16 @@ Future<void> _pollForNotificationData(String userId) async {
                   Positioned(
                     top: 8,
                     right: 8,
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.black,
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                        onPressed: () {
-                          trackInAppEvent(
-                            messageId: messageId,
-                            event: "dismissed",
-                            completion: (success) {},
-                          );
-                          Navigator.of(context).pop();
-                          _onNotificationClosed();
-                        },
-                      ),
+                    child: _inAppCloseButton(
+                      onPressed: () {
+                        trackInAppEvent(
+                          messageId: messageId,
+                          event: "dismissed",
+                          completion: (success) {},
+                        );
+                        Navigator.of(context).pop();
+                        _onNotificationClosed();
+                      },
                     ),
                   ),
                 ],

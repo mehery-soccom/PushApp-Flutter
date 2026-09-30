@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:mehery_sender/mehery_sender.dart';
 
-/// Shared PushApp instance — replace identifier with your Mehery dashboard value.
+/// Shared PushApp instance — replace identifier (and optional credentials) with your Mehery dashboard values.
 final pushApp = Pushapp(
   identifier: 'MeheryTestFlutter_1734160381705',
+  appId: 'yourAppId',
+  appSecret: 'yourAppSecret',
   sandbox: false,
 );
 

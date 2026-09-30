@@ -15,6 +15,10 @@ mixin PushappCoreMixin on PushappBase {
   Timer? _pendingAppOpenTimer;
   bool _appOpenSentInSession = false;
   Map<String, dynamic>? _pendingEventReferrer;
+  bool _appWasInBackground = false;
+  bool _lifecycleObserverAttached = false;
+  DateTime? _lastSessionEventAt;
+  _MeSendLifecycleObserver? _lifecycleObserver;
 
 Future<void> track(Map<String, dynamic> event) async {
     if (!_ensureDeviceRegistered('track')) {
@@ -89,11 +93,15 @@ Future<void> track(Map<String, dynamic> event) async {
     await _loadDeviceRegistrationState();
     final prefs = await SharedPreferences.getInstance();
     userId = prefs.getString('user_id') ?? '';
+    await _hydratePIdFromStorage();
     final lastToken = prefs.getString('device_token');
 
     try {
       if (Platform.isAndroid) {
-        final token = fcmToken?.trim();
+        var token = fcmToken?.trim();
+        if (token == null || token.isEmpty) {
+          token = lastToken?.trim();
+        }
         if (token == null || token.isEmpty) {
           await _failDeviceRegistration('fcmToken is required on Android.');
           if (meherySenderStrictRegistrationMode) {
@@ -102,18 +110,19 @@ Future<void> track(Map<String, dynamic> event) async {
           return false;
         }
 
+        final androidToken = token;
         if (!_deviceRegistered) {
           await _runWithRetry(
-            () => sendTokenToServer('android', token),
+            () => sendTokenToServer('android', androidToken),
             label: 'device_register',
           );
-          await prefs.setString('device_token', token);
+          await prefs.setString('device_token', androidToken);
         } else if (userId.isNotEmpty) {
           sdkPrint('User already logged in: $userId');
           _setupSocket(userId);
-          if (lastToken != token) {
-            await updateDeviceToken(token);
-            await prefs.setString('device_token', token);
+          if (lastToken != androidToken) {
+            await updateDeviceToken(androidToken);
+            await prefs.setString('device_token', androidToken);
           }
         }
       } else if (Platform.isIOS) {
@@ -152,7 +161,9 @@ Future<void> track(Map<String, dynamic> event) async {
       }
 
       if (_deviceRegistered) {
+        _attachLifecycleObserver();
         _scheduleAppOpen();
+        await _sendAppInstallIfNeeded();
         await _retryPendingLoginIfNeeded();
       }
       return _deviceRegistered;
@@ -335,6 +346,7 @@ Future<void> track(Map<String, dynamic> event) async {
             final responseData = jsonDecode(rawBody);
             sdkPrint(rawBody);
             await _absorbGuestIdFromRegisterResponse(responseData);
+            await _absorbPIdFromResponse(responseData);
           } catch (e) {
             // Registration succeeded; tolerate non-JSON/empty response formats.
             sdkPrint('Register response parse skipped: $e');
@@ -343,6 +355,7 @@ Future<void> track(Map<String, dynamic> event) async {
           sdkPrint('Register response body empty');
         }
         sdkPrint("guest_id: $guestId");
+        sdkPrint("p_id: $pId");
         sdkPrint("Token sent successfully!");
         await _markDeviceRegistered();
       } else {
@@ -447,6 +460,11 @@ Future<void> track(Map<String, dynamic> event) async {
     }
   }
 
+  /// Parses register / login JSON for `p_id` and saves it for events and profile updates.
+  Future<void> absorbPIdFromApiJson(Map<String, dynamic> json) async {
+    await _absorbPIdFromResponse(json);
+  }
+
   Future<void> _postDeviceLink({
     required String userId,
     required bool setupSocket,
@@ -489,6 +507,11 @@ Future<void> track(Map<String, dynamic> event) async {
           await setPushSessionId(sid);
           sdkPrint('Push session id saved for geo API');
         }
+        try {
+          await _absorbPIdFromResponse(jsonDecode(response.body));
+        } catch (e) {
+          sdkPrint('p_id parse skipped: $e');
+        }
         if (setupSocket) {
           _setupSocket(userId);
         }
@@ -518,6 +541,7 @@ Future<void> track(Map<String, dynamic> event) async {
     if (stored == userId) {
       await prefs.remove('user_id');
       await _clearSessionIdPrefs(prefs);
+      await _clearPId();
     }
     if (this.userId == userId) {
       this.userId = '';
@@ -550,7 +574,9 @@ Future<void> track(Map<String, dynamic> event) async {
         'user_id': userId,
         'device_id': deviceId,
       };
-      if (sessionId != null && sessionId.isNotEmpty) {
+      if (sessionId != null &&
+          sessionId.isNotEmpty &&
+          _isMongoObjectId(sessionId)) {
         requestBody['session_id'] = sessionId;
       }
       final response = await _meSendHttpPost(
@@ -621,8 +647,9 @@ Future<void> track(Map<String, dynamic> event) async {
   }
 
   Future<void> _loginNow(String userId) async {
-    final refreshSameUser = userId.isNotEmpty &&
-        (await SharedPreferences.getInstance()).getString('user_id') == userId;
+    final prefs = await SharedPreferences.getInstance();
+    final refreshSameUser =
+        userId.isNotEmpty && prefs.getString('user_id') == userId;
     if (refreshSameUser) {
       sdkPrint('Same user already linked — refreshing device/link for push session id');
     }
@@ -637,13 +664,46 @@ Future<void> track(Map<String, dynamic> event) async {
       );
       await _clearPendingLoginUserId();
     } catch (e) {
+      if (_isSessionObjectIdCastError(e)) {
+        sdkPrint(
+          'device/link session id rejected by server — '
+          'clearing local session_id and retrying once',
+        );
+        await _clearSessionIdPrefs(prefs);
+        try {
+          await _postDeviceLink(
+            userId: userId,
+            setupSocket: !refreshSameUser,
+          );
+          await _clearPendingLoginUserId();
+          return;
+        } catch (retryError) {
+          sdkPrint(
+            'device/link retry after session clear failed: $retryError',
+          );
+        }
+      }
+
+      // iOS still polls as the logged-in user when device/link is slow or
+      // fails. Android used to wipe user_id here, which made contact_id
+      // `_deviceId` and returned empty in-app results.
       sdkPrint(
-        'device/link failed after retries — staying guest; will retry on next app open: $e',
+        'device/link failed after retries — keeping $userId for in-app poll: $e',
       );
-      await _clearLocalUserSession(userId);
+      this.userId = userId;
+      await prefs.setString('user_id', userId);
       await _persistPendingLoginUserId(userId);
-      rethrow;
+      _setupSocket(userId);
     }
+  }
+
+  bool _isMongoObjectId(String value) =>
+      RegExp(r'^[a-fA-F0-9]{24}$').hasMatch(value);
+
+  bool _isSessionObjectIdCastError(Object error) {
+    final text = error.toString();
+    return text.contains('SESSION_PUSHAPP') ||
+        text.contains('Cast to ObjectId');
   }
 
 
@@ -767,6 +827,7 @@ Future<void> ping() async {
       return;
     }
 
+    final resolvedPId = await _resolvedPId();
     final body = <String, dynamic>{
       'additionalInfo': additionalInfo,
       'cohorts': cohorts,
@@ -777,6 +838,10 @@ Future<void> ping() async {
       'cohorts': _normalizeJsonValue(cohorts),
       'code': normalizedCode,
     };
+    if (resolvedPId.isNotEmpty) {
+      body['p_id'] = resolvedPId;
+      fingerprintPayload['p_id'] = resolvedPId;
+    }
     final payloadHash = _fingerprintFromJson(fingerprintPayload);
     final prefs = await SharedPreferences.getInstance();
     final lastHash = prefs.getString(_prefCustomerProfilePayloadHashKey) ?? '';
@@ -886,12 +951,16 @@ Future<void> ping() async {
       };
       sdkPrint(requestHeaders.toString());
 
-      final requestBody = {
+      final requestBody = <String, dynamic>{
         'user_id': resolvedUserId,
         'channel_id': channelId,
         'event_name': name,
         'event_data': data,
       };
+      final resolvedPId = await _resolvedPId();
+      if (resolvedPId.isNotEmpty) {
+        requestBody['p_id'] = resolvedPId;
+      }
 
       sdkPrint(jsonEncode(requestBody));
 
@@ -1106,7 +1175,7 @@ Future<void> ping() async {
     return headers;
   }
 
-  /// Pass opened notification/deeplink payloads for one-time app_open attribution.
+  /// Pass opened notification/deeplink payloads for one-time session attribution.
   void handleNotificationPayload(
     dynamic payload, {
     String sourceType = 'notification',
@@ -1116,10 +1185,46 @@ Future<void> ping() async {
       return;
     }
     final referrer = _extractEventReferrer(map, sourceType: sourceType);
-    if (referrer == null) {
+    _scheduleAppOpen(eventReferrer: referrer, immediate: true);
+  }
+
+  void _attachLifecycleObserver() {
+    if (_lifecycleObserverAttached) {
       return;
     }
-    _scheduleAppOpen(eventReferrer: referrer, immediate: true);
+    _lifecycleObserverAttached = true;
+    _lifecycleObserver = _MeSendLifecycleObserver(_onAppLifecycleState);
+    WidgetsBinding.instance.addObserver(_lifecycleObserver!);
+  }
+
+  void _onAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        _appWasInBackground = true;
+        AppLifecycle.isAppInForeground = false;
+        break;
+      case AppLifecycleState.inactive:
+        AppLifecycle.isAppInForeground = false;
+        break;
+      case AppLifecycleState.resumed:
+        AppLifecycle.isAppInForeground = true;
+        if (_appWasInBackground) {
+          _appWasInBackground = false;
+          _scheduleAppEnter();
+        }
+        break;
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  bool get _sessionEventRecentlySent {
+    final last = _lastSessionEventAt;
+    if (last == null) {
+      return false;
+    }
+    return DateTime.now().difference(last) < _appOpenDebounceDuration;
   }
 
   void _scheduleAppOpen({
@@ -1133,7 +1238,8 @@ Future<void> ping() async {
     if (immediate) {
       _pendingAppOpenTimer?.cancel();
       _pendingAppOpenTimer = null;
-      unawaited(_emitAppOpenEvent());
+      final name = _appOpenSentInSession ? 'app_enter' : 'app_open';
+      unawaited(_emitSessionEvent(name));
       return;
     }
 
@@ -1143,59 +1249,82 @@ Future<void> ping() async {
 
     _pendingAppOpenTimer?.cancel();
     _pendingAppOpenTimer = Timer(_appOpenDebounceDuration, () {
-      unawaited(_emitAppOpenEvent());
+      unawaited(_emitSessionEvent('app_open'));
     });
   }
 
-  Future<void> _emitAppOpenEvent() async {
+  void _scheduleAppEnter() {
+    if (!_appOpenSentInSession) {
+      _scheduleAppOpen();
+      return;
+    }
+    if (_sessionEventRecentlySent) {
+      return;
+    }
+    unawaited(_emitSessionEvent('app_enter'));
+  }
+
+  Future<void> _emitSessionEvent(String eventName) async {
     _pendingAppOpenTimer?.cancel();
     _pendingAppOpenTimer = null;
 
-    if (_appOpenSentInSession && _pendingEventReferrer == null) {
+    if (eventName == 'app_open' &&
+        _appOpenSentInSession &&
+        _pendingEventReferrer == null) {
       return;
     }
 
-    final eventData = <String, dynamic>{};
-    if (_pendingEventReferrer != null) {
-      eventData['event_referrer'] = _pendingEventReferrer;
-      _pendingEventReferrer = null;
-    }
+    final referrer = _pendingEventReferrer ??
+        meSendBuildEventReferrer(channelId: channelId);
+    _pendingEventReferrer = null;
 
-    _appOpenSentInSession = true;
-    await sendEvent('app_open', eventData);
+    if (eventName == 'app_open') {
+      _appOpenSentInSession = true;
+    }
+    _lastSessionEventAt = DateTime.now();
+    await sendEvent(eventName, {'event_referrer': referrer});
   }
 
-  Map<String, dynamic>? _extractEventReferrer(
+  Map<String, dynamic> _extractEventReferrer(
     Map<String, dynamic> map, {
     String sourceType = 'notification',
   }) {
+    final nested = meSendCoerceMap(map['event_referrer']) ?? map;
     final messageId = meSendParseString(
-      map['messageId'] ?? map['message_id'] ?? map['id'],
+      nested['messageId'] ??
+          nested['message_id'] ??
+          map['messageId'] ??
+          map['message_id'] ??
+          map['id'],
     );
     final campaignId = meSendParseString(
-      map['campaignId'] ?? map['campaign_id'] ?? map['campaign'],
+      nested['campaignId'] ??
+          nested['campaign_id'] ??
+          map['campaignId'] ??
+          map['campaign_id'] ??
+          map['campaign'],
     );
     final clickToken = meSendParseString(
-      map['click_token'] ?? map['token'] ?? map['t'],
+      nested['click_token'] ??
+          map['click_token'] ??
+          map['token'] ??
+          map['t'],
+    );
+    final resolvedType = meSendParseString(
+      nested['sourceType'] ??
+          nested['source_type'] ??
+          map['sourceType'] ??
+          map['referrer_type'] ??
+          sourceType,
     );
 
-    if (messageId.isEmpty && campaignId.isEmpty && clickToken.isEmpty) {
-      return null;
-    }
-
-    final referrer = <String, dynamic>{
-      'referrer_type': sourceType,
-    };
-    if (messageId.isNotEmpty) {
-      referrer['message_id'] = messageId;
-    }
-    if (campaignId.isNotEmpty) {
-      referrer['campaign_id'] = campaignId;
-    }
-    if (clickToken.isNotEmpty) {
-      referrer['click_token'] = clickToken;
-    }
-    return referrer;
+    return meSendBuildEventReferrer(
+      channelId: channelId,
+      sourceType: resolvedType,
+      campaignId: campaignId,
+      messageId: messageId,
+      clickToken: clickToken,
+    );
   }
 
   Future<void> _runWithRetry(
@@ -1247,6 +1376,15 @@ Future<void> ping() async {
     }
   }
 
+  Future<void> _absorbPIdFromResponse(dynamic responseData) async {
+    final extracted = meSendExtractPIdFromDynamic(responseData);
+    if (extracted == null || extracted.isEmpty) {
+      return;
+    }
+    await _persistPId(extracted);
+    sdkPrint('p_id: $pId');
+  }
+
   Future<void> _attemptGuestReRegistration() async {
     if (!_deviceRegistered) {
       return;
@@ -1294,7 +1432,8 @@ Future<void> ping() async {
     if (response.statusCode == 200 || response.statusCode == 201) {
       final responseData = jsonDecode(response.body);
       await _absorbGuestIdFromRegisterResponse(responseData);
-      sdkPrint('Guest re-registration succeeded: guest_id=$guestId');
+      await _absorbPIdFromResponse(responseData);
+      sdkPrint('Guest re-registration succeeded: guest_id=$guestId p_id=$pId');
     } else {
       throw Exception(
         'Guest re-registration failed: ${response.statusCode} ${response.body}',
@@ -1322,5 +1461,16 @@ Future<void> ping() async {
 
   String _fingerprintFromJson(Object? value) {
     return jsonEncode(_normalizeJsonValue(value));
+  }
+}
+
+class _MeSendLifecycleObserver with WidgetsBindingObserver {
+  _MeSendLifecycleObserver(this._onState);
+
+  final void Function(AppLifecycleState state) _onState;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _onState(state);
   }
 }

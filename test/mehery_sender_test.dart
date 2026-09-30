@@ -8,6 +8,14 @@ import 'package:mehery_sender/mehery_sender.dart';
 import 'package:mehery_sender/mesend_parsing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+Pushapp testPushApp({String identifier = 'demo_123'}) {
+  return Pushapp(
+    identifier: identifier,
+    appId: 'test-app-id',
+    appSecret: 'test-app-secret',
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -35,10 +43,24 @@ void main() {
     });
 
     test('Pushapp factory applies parsed tenant and channelId', () {
-      final pushApp = Pushapp(identifier: 'demo_1751694691225');
+      final pushApp = testPushApp(identifier: 'demo_1751694691225');
       expect(pushApp.tenant, 'demo');
       expect(pushApp.channelId, 'demo_1751694691225');
       expect(pushApp.serverUrl, 'https://demo.pushapp.ai');
+    });
+
+    test('Pushapp factory treats appId and appSecret as optional', () {
+      final withoutCredentials = Pushapp(identifier: 'demo_123');
+      expect(withoutCredentials.appId, isEmpty);
+      expect(withoutCredentials.appSecret, isEmpty);
+
+      final withWhitespace = Pushapp(
+        identifier: 'demo_123',
+        appId: 'id',
+        appSecret: '   ',
+      );
+      expect(withWhitespace.appId, 'id');
+      expect(withWhitespace.appSecret, isEmpty);
     });
 
     test('parsePushappServerBase normalizes trailing slashes and /pushapp', () {
@@ -97,6 +119,47 @@ void main() {
       expect(meSendParseStringList(null), isEmpty);
     });
 
+    test('meSendNormalizeReferrerSourceType maps journey enums', () {
+      expect(meSendNormalizeReferrerSourceType('notification'), 'NOTIFICATION');
+      expect(meSendNormalizeReferrerSourceType('in-app'), 'IN_APP');
+      expect(meSendNormalizeReferrerSourceType('INBOUND'), 'INBOUND');
+      expect(meSendNormalizeReferrerSourceType('unknown'), isNull);
+      expect(meSendNormalizeReferrerSourceType(null), isNull);
+    });
+
+    test('meSendBuildEventReferrer uses journey field names', () {
+      final organic = meSendBuildEventReferrer(channelId: 'demo_123');
+      expect(organic['sourceCategory'], isNull);
+      expect(organic['sourceType'], isNull);
+      expect(organic['sourceChannel'], 'APP');
+      expect(organic['sourceChannelId'], 'demo_123');
+      expect(organic['campaignId'], isNull);
+      expect(organic['messageId'], isNull);
+
+      final fromPush = meSendBuildEventReferrer(
+        channelId: 'demo_123',
+        sourceType: 'notification',
+        campaignId: 'camp-1',
+        messageId: 'msg-1',
+        clickToken: 'tok-1',
+      );
+      expect(fromPush['sourceCategory'], 'CAMPAIGN');
+      expect(fromPush['sourceType'], 'NOTIFICATION');
+      expect(fromPush['sourceChannel'], 'APP');
+      expect(fromPush['sourceChannelId'], 'demo_123');
+      expect(fromPush['campaignId'], 'camp-1');
+      expect(fromPush['messageId'], 'msg-1');
+      expect(fromPush['click_token'], 'tok-1');
+
+      final messageOnly = meSendBuildEventReferrer(
+        channelId: 'demo_123',
+        sourceType: 'in_app',
+        messageId: 'msg-2',
+      );
+      expect(messageOnly['sourceCategory'], 'MESSAGE');
+      expect(messageOnly['sourceType'], 'IN_APP');
+    });
+
     test('TooltipStyle.fromJson tolerates missing and wrong-type fields', () {
       final style = TooltipStyle.fromJson({
         'line_1': 123,
@@ -112,6 +175,52 @@ void main() {
       expect(style.line1TextStyles, ['bold']);
       expect(style.line1Icon, isNotEmpty);
       expect(style.bgColor, '#000000');
+    });
+  });
+
+  group('app install emit', () {
+    test('first install when nothing recorded', () {
+      expect(
+        meSendAppInstallEmit(
+          lastRecordedVersion: null,
+          currentVersion: '1.0.0+1',
+          installAlreadySent: false,
+        ),
+        MeSendAppInstallEmit.firstInstall,
+      );
+    });
+
+    test('skips when version is unchanged', () {
+      expect(
+        meSendAppInstallEmit(
+          lastRecordedVersion: '1.0.0+1',
+          currentVersion: '1.0.0+1',
+          installAlreadySent: true,
+        ),
+        MeSendAppInstallEmit.none,
+      );
+    });
+
+    test('emits update when version changes', () {
+      expect(
+        meSendAppInstallEmit(
+          lastRecordedVersion: '1.0.0+1',
+          currentVersion: '1.0.1+2',
+          installAlreadySent: true,
+        ),
+        MeSendAppInstallEmit.update,
+      );
+    });
+
+    test('baselines existing installs that have no stored version', () {
+      expect(
+        meSendAppInstallEmit(
+          lastRecordedVersion: null,
+          currentVersion: '1.0.0+1',
+          installAlreadySent: true,
+        ),
+        MeSendAppInstallEmit.rememberVersion,
+      );
     });
   });
 
@@ -150,13 +259,57 @@ void main() {
 
     test('absorbSessionFromApiJson persists session for geo API', () async {
       SharedPreferences.setMockInitialValues({});
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       await pushApp.absorbSessionFromApiJson({
         'data': {'session_id': 'persist-me'},
       });
 
       expect(await pushApp.getPushSessionId(), 'persist-me');
+    });
+  });
+
+  group('p_id extraction', () {
+    test('finds p_id on device object', () {
+      expect(
+        meSendExtractPIdFromDynamic({
+          'device': {'user_id': 'guest-1', 'p_id': ' pid-99 '},
+        }),
+        'pid-99',
+      );
+    });
+
+    test('finds top-level p_id', () {
+      expect(meSendExtractPIdFromDynamic({'p_id': 'root-pid'}), 'root-pid');
+    });
+
+    test('does not treat pid or profileId as p_id', () {
+      expect(
+        meSendExtractPIdFromDynamic({
+          'pid': 'wrong',
+          'profileId': 'wrong',
+          'profile_id': 'wrong',
+          'device': {'_id': 'wrong'},
+        }),
+        isNull,
+      );
+    });
+
+    test('returns null for invalid JSON body', () {
+      expect(meSendExtractPIdFromBody('not-json'), isNull);
+    });
+
+    test('absorbPIdFromApiJson persists p_id', () async {
+      SharedPreferences.setMockInitialValues({});
+      final pushApp = testPushApp();
+
+      await pushApp.absorbPIdFromApiJson({
+        'device': {'p_id': 'profile-doc-1'},
+      });
+
+      expect(pushApp.pId, 'profile-doc-1');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('mesend_p_id'), 'profile-doc-1');
     });
   });
 
@@ -247,7 +400,7 @@ void main() {
     });
 
     test('sendEvent queues without throwing when device is not registered', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       expect(pushApp.isDeviceRegistered, isFalse);
 
       await expectLater(
@@ -258,19 +411,19 @@ void main() {
     });
 
     test('login queues without throwing when device is not registered', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       await expectLater(pushApp.login('user-1'), completes);
       expect(pushApp.isDeviceRegistered, isFalse);
     });
 
     test('initPage does not throw before registration completes', () {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       expect(() => pushApp.initPage('dashboard'), returnsNormally);
     });
 
     test('track throws only in strict registration mode', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       await pushApp.track({'event': 'open', 't': 'token-1'});
       expect(pushApp.isDeviceRegistered, isFalse);
@@ -286,7 +439,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'mesend_device_registration_complete': true,
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       final states = <bool>[];
       final sub = pushApp.deviceRegistrationState.listen(states.add);
@@ -310,7 +463,7 @@ void main() {
     tearDown(resetMeSendFirebaseListenersForTest);
 
     test('registrationSnapshot starts pending before load', () {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       expect(
         pushApp.registrationSnapshot.status,
         MeSendDeviceRegistrationStatus.pending,
@@ -322,7 +475,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'mesend_device_registration_complete': true,
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       final states = <MeSendDeviceRegistrationState>[];
       final sub = pushApp.registrationState.listen(states.add);
 
@@ -349,7 +502,7 @@ void main() {
     });
 
     test('registrationState emits failed when device register fails', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       final states = <MeSendDeviceRegistrationState>[];
       final sub = pushApp.registrationState.listen(states.add);
 
@@ -383,7 +536,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'mesend_device_registration_complete': true,
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       final boolStates = <bool>[];
       final sub = pushApp.deviceRegistrationState.listen(boolStates.add);
 
@@ -407,7 +560,7 @@ void main() {
         'user_id': 'user-a',
         'persistent_device_id': 'test-device',
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       await pushApp.login('user-b');
 
@@ -416,14 +569,14 @@ void main() {
       expect(prefs.getString('user_id'), isNot('user-a'));
     });
 
-    test('login clears stored user before linking when device is registered', () async {
+    test('login keeps new userId for in-app poll when device/link fails', () async {
       SharedPreferences.setMockInitialValues({
         'user_id': 'user-a',
         'mesend_device_registration_complete': true,
         'persistent_device_id': 'test-device',
         'session_id': 'session-a',
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       try {
         await pushApp.login('user-b');
@@ -431,10 +584,11 @@ void main() {
         // Network unavailable in unit tests; link fails after retries.
       }
 
-      // After failed device/link the SDK stays guest in memory and queues retry.
-      expect(pushApp.userId, '');
+      // After failed device/link the SDK still keeps the new user so in-app
+      // poll contact_id is not `_deviceId`, and queues a retry.
+      expect(pushApp.userId, 'user-b');
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('user_id'), isNot('user-a'));
+      expect(prefs.getString('user_id'), 'user-b');
       expect(prefs.getString('session_id'), isNull);
       expect(prefs.getString('mesend_pending_login_user_id'), 'user-b');
     });
@@ -444,7 +598,7 @@ void main() {
         'user_id': 'user-a',
         'persistent_device_id': 'test-device',
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       await pushApp.login('user-a');
 
@@ -601,7 +755,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'mesend_device_registration_complete': true,
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.setupMethodChannelHandler();
 
       Object? channelError;
@@ -625,7 +779,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'mesend_device_registration_complete': true,
       });
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.setupMethodChannelHandler();
 
       Object? channelError;
@@ -650,7 +804,7 @@ void main() {
     });
 
     test('ignores malformed trackNotification payloads without channel error', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.setupMethodChannelHandler();
 
       Object? channelError;
@@ -671,7 +825,7 @@ void main() {
     });
 
     test('ignores trackNotification map missing required fields', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.setupMethodChannelHandler();
 
       Object? channelError;
@@ -692,7 +846,7 @@ void main() {
     });
 
     test('ignores unknown method channel calls', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.setupMethodChannelHandler();
 
       Object? channelError;
@@ -742,7 +896,7 @@ void main() {
 
     test('sdkPrint is silent when API logging is disabled', () {
       meherySenderApiLoggingEnabled = false;
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       expect(() => pushApp.sdkPrint('secret-token-log'), returnsNormally);
     });
@@ -758,7 +912,7 @@ void main() {
     tearDown(resetMeSendFirebaseListenersForTest);
 
     test('returns false without throwing on unsupported test platform', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       final ok = await pushApp.initializeAndSendToken(
         fcmToken: 'test-fcm',
@@ -773,7 +927,7 @@ void main() {
     });
 
     test('returns false for null tokens without strict mode', () async {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       final ok = await pushApp.initializeAndSendToken(
         fcmToken: null,
@@ -790,7 +944,7 @@ void main() {
 
   group('in-app template parsing', () {
     test('getAlignment tolerates missing and wrong-type align fields', () {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       expect(pushApp.getAlignment({}), 'bottom-right');
       expect(
@@ -875,7 +1029,7 @@ void main() {
       WidgetTester tester,
     ) async {
       final navKey = GlobalKey<NavigatorState>();
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       pushApp.attachNavigatorKey(navKey);
 
       await tester.pumpWidget(
@@ -892,14 +1046,14 @@ void main() {
 
   group('route observer', () {
     test('Pushapp exposes navigatorObservers for MaterialApp', () {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
 
       expect(pushApp.navigatorObservers, contains(pushApp.meSendRouteObserver));
       expect(pushApp.navigatorObservers, hasLength(1));
     });
 
     test('MeSendRouteObserver tracks navigation without throwing', () {
-      final pushApp = Pushapp(identifier: 'demo_123');
+      final pushApp = testPushApp();
       final observer = pushApp.meSendRouteObserver;
 
       final loginRoute = MaterialPageRoute<void>(

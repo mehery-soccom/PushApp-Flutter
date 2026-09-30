@@ -37,7 +37,7 @@ Add to your app `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  mehery_sender: ^0.1.17
+  mehery_sender: ^0.1.18
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
 ```
@@ -48,7 +48,7 @@ dependencies:
 flutter pub get
 ```
 
-### Compatibility matrix (`mehery_sender` 0.1.17)
+### Compatibility matrix (`mehery_sender` 0.1.18)
 
 Host apps within this matrix do **not** need `dependency_overrides`.
 
@@ -77,7 +77,7 @@ Verified with `flutter analyze`, `flutter test`, and example builds on **Flutter
 | `firebase_core` | 4.10.0 – 4.11.0                 |
 | `firebase_messaging` | 16.3.0 – 16.4.0                 |
 | `flutter_local_notifications` | 22.0.0                          |
-| `mehery_sender` | 0.1.17                          |
+| `mehery_sender` | 0.1.18                          |
 
 New releases document an updated matrix in [CHANGELOG.md](CHANGELOG.md).
 
@@ -282,7 +282,7 @@ Subsystem tags appear as `[MeherySender][API]`, `[MeherySender][Push|foreground]
 
 ## 2.2 SDK instance — `lib/push_service.dart`
 
-Create one shared instance and a navigator key for in-app overlays:
+Create one shared instance and a navigator key for in-app overlays. `identifier` is required. `appId` and `appSecret` are optional Mehery dashboard credentials (`X-App-Id` / `X-App-Key`):
 
 ```dart
 import 'package:flutter/material.dart';
@@ -290,6 +290,8 @@ import 'package:mehery_sender/mehery_sender.dart';
 
 final pushApp = Pushapp(
   identifier: 'yourTenant_yourChannelId', // from Mehery dashboard
+  appId: 'yourAppId', 
+  appSecret: 'yourAppSecret', 
   sandbox: false,
 );
 
@@ -347,6 +349,32 @@ pushApp.registrationState.listen((state) {
 ```
 
 [Pushapp.deviceRegistrationState] still emits `true`/`false` for simple listeners.
+
+### Journey attribution (`app_open` / `app_enter`)
+
+Session events include `event_referrer` for journeys:
+
+| Field | Values |
+|---|---|
+| `sourceCategory` | `null`, `CAMPAIGN`, `MESSAGE` |
+| `sourceType` | `null`, `NOTIFICATION`, `IN_APP`, `INBOUND`, `OUTBOUND` |
+| `sourceChannel` | `APP` |
+| `sourceChannelId` | current channel id |
+| `campaignId` / `messageId` | from the opened notification when present |
+
+- First session: `app_open`
+- Return from background: `app_enter`
+- Notification / deeplink open: same events with `sourceType: NOTIFICATION`
+
+The SDK already forwards FCM `onMessageOpenedApp` / `getInitialMessage` payloads. You can also call:
+
+```dart
+pushApp.handleNotificationPayload({
+  ...message.data,
+  if (message.messageId != null) 'messageId': message.messageId,
+  'sourceType': 'notification',
+});
+```
 
 **Retry on failure** — `initializeAndSendToken` returns `Future<bool>` and does not throw unless [meherySenderStrictRegistrationMode] is enabled:
 
@@ -532,6 +560,9 @@ Use `initPage` when you need in-app polling on that screen; route observers hand
 await pushApp.sendEvent('event_name', {'key': 'value'});
 ```
 
+The SDK attaches `p_id` (profile document id from `device/register` and `device/link`) on every event and on profile update when it is available. Hosts do not pass it. `p_id` is not the same as `user_id`.
+
+On first launch the SDK sends `app_install` with `updated: false`. When the host app version changes it sends `app_install` again with `updated: true`.
 
 ---
 
@@ -690,7 +721,7 @@ Requires Flutter **≥ 3.38.1** (stable channel in CI). Fix analyzer errors and 
 
 ## Version
 
-`^0.1.17` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
+`^0.1.18` — see [VERSIONING.md](VERSIONING.md) for semver rules and [CHANGELOG.md](CHANGELOG.md) for release notes and migration steps.
 
 **Privacy & data handling:** [PRIVACY.md](PRIVACY.md) (device data, APIs, retention, GDPR/CCPA host checklist).
 

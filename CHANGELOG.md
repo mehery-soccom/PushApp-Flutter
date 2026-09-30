@@ -10,6 +10,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [0.1.18] - 2026-09-30
+
+Profile id on events, journey attribution, app-update events, and FCM token refresh against the existing update-token API.
+
+### Added
+
+- **`p_id` on events and profile update** — stores `p_id` from `device/register` and `device/link` and sends it on `POST /event` and `PUT /customer/profile` whenever `user_id` is sent. This is the profile document id, not `user_id`. Hosts do not pass it.
+- **Journey `event_referrer`** — `app_open` and `app_enter` send `sourceCategory`, `sourceType`, `sourceChannel`, `sourceChannelId`, `campaignId`, and `messageId`. Organic opens use `sourceChannel: APP` and the current channel id. Notification/deeplink opens set `sourceType: NOTIFICATION` and `CAMPAIGN`/`MESSAGE` from ids. Returning from background emits `app_enter`.
+- **`app_install` on host app update** — when the installed app version changes, the SDK sends `app_install` with `updated: true`. First install sends `updated: false`.
+- **FCM token rotation** — when Firebase refreshes the token, `initializeAndSendToken` calls existing `POST /pushapp/api/update/token` so the backend stores the new token for that device.
+
+### Changed
+
+- **Android expandable tray** — image pushes keep BigText (full body + expand) and use the image as large icon instead of BigPicture style.
+
+### Migration from 0.1.17 → 0.1.18
+
+1. **pubspec** — bump `mehery_sender: ^0.1.18`.
+2. Keep forwarding `FirebaseMessaging.instance.onTokenRefresh` into `initializeAndSendToken` so rotated FCM tokens are uploaded.
+3. **App credentials** — pass `appId` and `appSecret` to `Pushapp(...)` if your backend expects `X-App-Id` / `X-App-Key` headers (defaults to empty; no change required for existing hosts).
+
+---
+
 ## [0.1.17] - 2026-08-18
 
 Android tray notifications expand to show the full body text.
@@ -335,7 +358,8 @@ First semver-aligned integration baseline for production hosts.
 
 ---
 
-[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.17...HEAD
+[Unreleased]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.18...HEAD
+[0.1.18]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.15...v0.1.16
 [0.1.14]: https://github.com/mehery-soccom/PushApp-Flutter/compare/v0.1.13...v0.1.14

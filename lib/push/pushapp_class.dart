@@ -11,9 +11,11 @@ abstract class PushappBase {
   static const _prefDeviceRegistrationCompleteKey =
       'mesend_device_registration_complete';
   static const _prefAppInstallSentKey = 'mesend_app_install_sent';
+  static const _prefAppInstallVersionKey = 'mesend_app_install_version';
 
   static const _prefGuestUserIdKey = 'mesend_guest_user_id';
   static const _prefPendingLoginUserIdKey = 'mesend_pending_login_user_id';
+  static const _prefPIdKey = 'mesend_p_id';
 
   late final String serverUrl;
   String? _wsUrlOverride;
@@ -43,6 +45,7 @@ abstract class PushappBase {
 
   final List<({String name, Map<String, dynamic> data})> _pendingEvents = [];
   String? _pendingLoginUserId;
+  Future<void>? _appInstallInFlight;
 
   List<Map<String, dynamic>> _notificationQueue = [];
   bool _isProcessingQueue = false;
@@ -71,6 +74,7 @@ abstract class PushappBase {
   late final String _hostTld;
   String userId = "";
   String guestId = "";
+  String pId = "";
   BuildContext? buildContext;
   GlobalKey<NavigatorState>? _navigatorKey;
 
@@ -250,22 +254,68 @@ abstract class PushappBase {
     await prefs.remove(_prefPendingLoginUserIdKey);
   }
 
-  Future<void> _sendAppInstallIfNeeded() async {
+  Future<void> _sendAppInstallIfNeeded() {
+    final inFlight = _appInstallInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final run = _sendAppInstallOnce();
+    _appInstallInFlight = run.whenComplete(() {
+      _appInstallInFlight = null;
+    });
+    return _appInstallInFlight!;
+  }
+
+  Future<void> _sendAppInstallOnce() async {
     final prefs = await SharedPreferences.getInstance();
     final alreadySent = prefs.getBool(_prefAppInstallSentKey) ?? false;
-    if (alreadySent) {
+    final lastVersion = prefs.getString(_prefAppInstallVersionKey);
+
+    String currentVersion = '';
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      currentVersion =
+          '${packageInfo.version}+${packageInfo.buildNumber}'.trim();
+    } catch (e) {
+      sdkPrint('app_install version read skipped: $e');
+      if (alreadySent) {
+        return;
+      }
+    }
+
+    final action = meSendAppInstallEmit(
+      lastRecordedVersion: lastVersion,
+      currentVersion: currentVersion,
+      installAlreadySent: alreadySent,
+    );
+
+    if (action == MeSendAppInstallEmit.none) {
+      return;
+    }
+    if (action == MeSendAppInstallEmit.rememberVersion) {
+      await prefs.setString(_prefAppInstallVersionKey, currentVersion);
+      sdkPrint('app_install version baseline stored: $currentVersion');
       return;
     }
 
+    final isUpdate = action == MeSendAppInstallEmit.update;
     final sent = await _sendEventNow(
       'app_install',
       {
         'source': 'sdk',
+        'updated': isUpdate,
       },
     );
     if (sent) {
       await prefs.setBool(_prefAppInstallSentKey, true);
-      sdkPrint('app_install sent and marked complete');
+      if (currentVersion.isNotEmpty) {
+        await prefs.setString(_prefAppInstallVersionKey, currentVersion);
+      }
+      sdkPrint(
+        isUpdate
+            ? 'app_install sent with updated=true ($currentVersion)'
+            : 'app_install sent and marked complete',
+      );
     } else {
       sdkPrint('app_install send failed/skipped; will retry later');
     }
@@ -318,11 +368,45 @@ abstract class PushappBase {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefGuestUserIdKey, trimmed);
   }
+
+  Future<void> _hydratePIdFromStorage() async {
+    if (pId.isNotEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_prefPIdKey);
+    if (stored != null && stored.trim().isNotEmpty) {
+      pId = stored.trim();
+    }
+  }
+
+  Future<void> _persistPId(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    pId = trimmed;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefPIdKey, trimmed);
+  }
+
+  Future<void> _clearPId() async {
+    pId = '';
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefPIdKey);
+  }
+
+  Future<String> _resolvedPId() async {
+    await _hydratePIdFromStorage();
+    return pId.trim();
+  }
 }
 
 class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
   static Future<String> getDeviceId() => PushappCoreMixin.getDeviceId();
 
+  /// Optional Mehery dashboard credentials. When set, they are sent on API
+  /// calls as `X-App-Id` and `X-App-Key`.
   factory Pushapp({
     required String identifier,
     String appId = '',
@@ -331,12 +415,15 @@ class Pushapp extends PushappBase with PushappCoreMixin, PushappInAppMixin {
     bool developmentHost = false,
     String? serverUrlOverride,
   }) {
+    final trimmedAppId = appId.trim();
+    final trimmedAppSecret = appSecret.trim();
+
     final parts = _parsePushappIdentifier(identifier);
     return Pushapp._(
       tenant: parts.tenant,
       channelId: parts.channelId,
-      appId: appId,
-      appSecret: appSecret,
+      appId: trimmedAppId,
+      appSecret: trimmedAppSecret,
       sandbox: sandbox,
       developmentHost: developmentHost,
       serverUrlOverride: serverUrlOverride,

@@ -99,13 +99,8 @@ class LiveActivityMessagingService : FirebaseMessagingService() {
                         val inputStream = connection.inputStream
                         val bitmap = BitmapFactory.decodeStream(inputStream)
                         if (bitmap != null) {
-                            builder
-                                .setLargeIcon(bitmap)
-                                .setStyle(
-                                    NotificationCompat.BigPictureStyle()
-                                        .bigPicture(bitmap)
-                                        .bigLargeIcon(null as android.graphics.Bitmap?),
-                                )
+                            // Keep BigText so the shade shows ▼ and the full body.
+                            builder.setLargeIcon(bitmap)
                         } else {
                             Log.w(tag, "Image decode returned null for: $image")
                         }

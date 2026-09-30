@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -519,16 +520,8 @@ class MeSendPushNotificationDisplay {
       return;
     }
 
-    // Android already displays notification-block payloads when backgrounded.
-    if (Platform.isAndroid &&
-        source == 'background' &&
-        message.notification != null) {
-      meherySenderLog(
-        'notification block present — system may display; skipping local tray',
-        tag: 'Push|background',
-      );
-      return;
-    }
+    // Always post our expandable Big Text tray. The system compact shade
+    // has no ▼ and hides the full body.
 
     // iOS with a notification block is shown by the system in foreground.
     if (Platform.isIOS &&
@@ -556,7 +549,7 @@ class MeSendPushNotificationDisplay {
     }
 
     final notificationId = _notificationIdFor(message, payload);
-    final styleInformation = await _buildAndroidStyleInformation(payload);
+    final androidImage = await _downloadAndroidImageBytes(payload);
 
     final androidDetails = AndroidNotificationDetails(
       payload.androidChannelId,
@@ -564,7 +557,13 @@ class MeSendPushNotificationDisplay {
       channelDescription: 'MeSend push notifications',
       importance: Importance.high,
       priority: Priority.high,
-      styleInformation: styleInformation,
+      styleInformation: BigTextStyleInformation(
+        payload.displayBody,
+        contentTitle: payload.displayTitle,
+      ),
+      largeIcon: androidImage == null
+          ? null
+          : ByteArrayAndroidBitmap(androidImage),
       actions: _buildAndroidActions(payload),
     );
     const iosDetails = DarwinNotificationDetails(
@@ -662,7 +661,7 @@ class MeSendPushNotificationDisplay {
     return <String, dynamic>{};
   }
 
-  static Future<StyleInformation?> _buildAndroidStyleInformation(
+  static Future<Uint8List?> _downloadAndroidImageBytes(
     MeSendDataPushPayload payload,
   ) async {
     if (!Platform.isAndroid) {
@@ -671,64 +670,26 @@ class MeSendPushNotificationDisplay {
 
     final imageUrl = payload.imageUrl?.trim();
     if (imageUrl == null || imageUrl.isEmpty) {
-      meherySenderLog('android style: big-text applied', tag: 'Push|foreground');
-      return BigTextStyleInformation(
-        payload.displayBody,
-        contentTitle: payload.displayTitle,
-      );
+      return null;
     }
 
     meherySenderLog('image candidate: $imageUrl', tag: 'Push|image');
     try {
       final response = await http.get(Uri.parse(imageUrl));
-      meherySenderLog(
-        'image download status=${response.statusCode}',
-        tag: 'Push|image',
-      );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         meherySenderLog(
-          'android style: big-text fallback (image HTTP ${response.statusCode})',
-          tag: 'Push|foreground',
+          'image download HTTP ${response.statusCode}',
+          tag: 'Push|image',
         );
-        return BigTextStyleInformation(
-          payload.displayBody,
-          contentTitle: payload.displayTitle,
-        );
+        return null;
       }
-
-      final bytes = response.bodyBytes;
-      meherySenderLog(
-        'image bytes downloaded: ${bytes.length}',
-        tag: 'Push|image',
-      );
-      if (bytes.isEmpty) {
-        meherySenderLog(
-          'android style: big-text fallback (empty image)',
-          tag: 'Push|foreground',
-        );
-        return BigTextStyleInformation(
-          payload.displayBody,
-          contentTitle: payload.displayTitle,
-        );
+      if (response.bodyBytes.isEmpty) {
+        return null;
       }
-
-      meherySenderLog('android style: big-picture applied', tag: 'Push|foreground');
-      return BigPictureStyleInformation(
-        ByteArrayAndroidBitmap(bytes),
-        contentTitle: payload.displayTitle,
-        summaryText: payload.displayBody,
-        hideExpandedLargeIcon: true,
-      );
+      return response.bodyBytes;
     } catch (error) {
       meherySenderLog('image download failed: $error', tag: 'Push|image');
-      meherySenderLog(
-        'android style: big-text fallback (image download failed)',
-        tag: 'Push|foreground',
-      );
-      return BigTextStyleInformation(
-        payload.displayBody,
-        contentTitle: payload.displayTitle,
-      );
+      return null;
     }
   }
 

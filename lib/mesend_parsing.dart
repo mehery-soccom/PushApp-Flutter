@@ -74,6 +74,52 @@ String? meSendExtractSessionIdFromDynamic(dynamic decoded, [int depth = 0]) {
   return null;
 }
 
+String? meSendExtractPIdFromDynamic(dynamic decoded, [int depth = 0]) {
+  if (depth > 12 || decoded == null || decoded is! Map) return null;
+  final m = Map<String, dynamic>.from(decoded);
+  final v = m['p_id'];
+  if (v != null && v.toString().trim().isNotEmpty) {
+    return v.toString().trim();
+  }
+  for (final nestKey in [
+    'device',
+    'data',
+    'payload',
+    'meta',
+    'result',
+    'extra',
+    'response',
+    'session',
+  ]) {
+    final nested = m[nestKey];
+    if (nested is Map) {
+      final found = meSendExtractPIdFromDynamic(nested, depth + 1);
+      if (found != null) return found;
+    }
+  }
+  final results = m['results'];
+  if (results is List) {
+    for (final item in results) {
+      if (item is Map) {
+        final found = meSendExtractPIdFromDynamic(
+          Map<String, dynamic>.from(item),
+          depth + 1,
+        );
+        if (found != null) return found;
+      }
+    }
+  }
+  return null;
+}
+
+String? meSendExtractPIdFromBody(String body) {
+  try {
+    return meSendExtractPIdFromDynamic(jsonDecode(body));
+  } catch (_) {
+    return null;
+  }
+}
+
 String? meSendExtractSessionIdFromBody(String body) {
   try {
     return meSendExtractSessionIdFromDynamic(jsonDecode(body));
@@ -204,4 +250,100 @@ bool meSendIsInlineInAppTemplateCode(String code) {
 /// Whether an in-app template [code] is a tooltip (non-blocking for inline).
 bool meSendIsTooltipInAppTemplateCode(String code) {
   return code.toLowerCase() == 'tooltip';
+}
+
+/// What [app_install] should do for this process vs last recorded host version.
+enum MeSendAppInstallEmit {
+  /// Same version (or no current version) — do not send.
+  none,
+
+  /// First install — send `app_install` with `updated: false`.
+  firstInstall,
+
+  /// Host app version changed — send `app_install` with `updated: true`.
+  update,
+
+  /// Install was already sent before version tracking existed; store current
+  /// version without emitting (avoids a false update on SDK upgrade).
+  rememberVersion,
+}
+
+MeSendAppInstallEmit meSendAppInstallEmit({
+  required String? lastRecordedVersion,
+  required String currentVersion,
+  required bool installAlreadySent,
+}) {
+  final current = currentVersion.trim();
+  final last = lastRecordedVersion?.trim();
+  if (current.isEmpty) {
+    if (last != null && last.isNotEmpty) {
+      return MeSendAppInstallEmit.none;
+    }
+    return installAlreadySent
+        ? MeSendAppInstallEmit.none
+        : MeSendAppInstallEmit.firstInstall;
+  }
+  if (last != null && last.isNotEmpty && last == current) {
+    return MeSendAppInstallEmit.none;
+  }
+  if (last == null || last.isEmpty) {
+    return installAlreadySent
+        ? MeSendAppInstallEmit.rememberVersion
+        : MeSendAppInstallEmit.firstInstall;
+  }
+  return MeSendAppInstallEmit.update;
+}
+
+/// Normalizes journey `sourceType` to `NOTIFICATION`, `IN_APP`, `INBOUND`,
+/// `OUTBOUND`, or `null`.
+String? meSendNormalizeReferrerSourceType(dynamic value) {
+  final raw = meSendParseString(value).trim().toUpperCase().replaceAll('-', '_');
+  if (raw.isEmpty) {
+    return null;
+  }
+  if (raw == 'INAPP' || raw == 'IN_APP') {
+    return 'IN_APP';
+  }
+  if (raw == 'NOTIFICATION' || raw == 'INBOUND' || raw == 'OUTBOUND') {
+    return raw;
+  }
+  return null;
+}
+
+/// Journey `event_referrer` for `app_open` / `app_enter`.
+///
+/// Always includes `sourceChannel: APP` and `sourceChannelId` when [channelId]
+/// is set. Unknown attribution fields are explicit JSON `null`.
+Map<String, dynamic> meSendBuildEventReferrer({
+  required String channelId,
+  String? sourceType,
+  String? campaignId,
+  String? messageId,
+  String? clickToken,
+}) {
+  final campaign = (campaignId ?? '').trim();
+  final message = (messageId ?? '').trim();
+  final type = meSendNormalizeReferrerSourceType(sourceType);
+  final channel = channelId.trim();
+
+  String? sourceCategory;
+  if (campaign.isNotEmpty) {
+    sourceCategory = 'CAMPAIGN';
+  } else if (message.isNotEmpty) {
+    sourceCategory = 'MESSAGE';
+  }
+
+  final referrer = <String, dynamic>{
+    'sourceCategory': sourceCategory,
+    'sourceType': type,
+    'sourceChannel': 'APP',
+    'sourceChannelId': channel.isEmpty ? null : channel,
+    'campaignId': campaign.isEmpty ? null : campaign,
+    'messageId': message.isEmpty ? null : message,
+  };
+  final token = (clickToken ?? '').trim();
+  if (token.isNotEmpty) {
+    referrer['click_token'] = token;
+  }
+  return referrer;
 }
