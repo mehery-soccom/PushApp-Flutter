@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:mehery_sender/mehery_sender.dart';
 
 /// Shared PushApp instance — replace identifier (and optional credentials) with your Mehery dashboard values.

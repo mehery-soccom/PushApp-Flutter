@@ -47,7 +47,7 @@ abstract class PushappBase {
   String? _pendingLoginUserId;
   Future<void>? _appInstallInFlight;
 
-  List<Map<String, dynamic>> _notificationQueue = [];
+  final List<Map<String, dynamic>> _notificationQueue = [];
   bool _isProcessingQueue = false;
 
   /// Identifies the overlay that currently owns the in-app queue slot.

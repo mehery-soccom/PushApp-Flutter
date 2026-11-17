@@ -33,10 +33,15 @@ dependencies:
   package_info_plus: ^8.3.0
   web_socket_channel: ^2.4.0
   flutter_html: ^3.0.0
+  # flutter_html 3.0.0 calls html's internal qs.matches
+  # (implementation_imports), which html 0.15.7 removed.
+  # Pin 0.15.6 until flutter_html is upgraded.
+  html: 0.15.6
   webview_flutter: ^4.13.0
   super_tooltip: ^2.1.1
   webview_flutter_wkwebview: ^3.22.0
 
+  material_ui: any
 dev_dependencies:
   flutter_test:
     sdk: flutter

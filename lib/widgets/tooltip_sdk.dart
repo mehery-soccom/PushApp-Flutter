@@ -190,7 +190,7 @@ class TooltipSdk extends ChangeNotifier {
         final screenWidth = MediaQuery.of(context).size.width;
 
         // Helper function to build TextStyle from styles list
-        TextStyle _buildTextStyle({
+        TextStyle buildTextStyle({
           required double fontSize,
           required String color,
           required List<String> styles,
@@ -230,12 +230,12 @@ class TooltipSdk extends ChangeNotifier {
                         style.line1Icon.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 4),
-                        child: _buildTooltipLine1(style, _buildTextStyle),
+                        child: _buildTooltipLine1(style, buildTextStyle),
                       ),
                     if (style.line2.isNotEmpty)
                       Text(
                         style.line2,
-                        style: _buildTextStyle(
+                        style: buildTextStyle(
                           fontSize: style.line2Size,
                           color: style.line2Color,
                           styles: style.line2TextStyles,

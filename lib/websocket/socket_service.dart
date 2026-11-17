@@ -78,10 +78,10 @@ class SocketService {
       //   final iosInfo = await _deviceInfoPlugin.iosInfo;
       //   deviceId = iosInfo.identifierForVendor ?? '';
       // }
-      sdkPrint(_userId!+"_"+deviceId);
+      sdkPrint("${_userId!}_$deviceId");
       final authMessage = {
         'type': 'auth',
-        'userId': _userId!+"_"+deviceId,
+        'userId': "${_userId!}_$deviceId",
       };
       _channel!.sink.add(jsonEncode(authMessage));
     }

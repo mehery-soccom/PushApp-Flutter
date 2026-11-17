@@ -1,14 +1,17 @@
 part of mehery_sender;
 
 mixin PushappInAppMixin on PushappCoreMixin {
-Future<void> _pollForNotificationData(String userId) async {
-      if (!isDeviceRegistered) {
+  @override
+  Future<void> _pollForNotificationData(String userId) async {
+    if (!isDeviceRegistered) {
       sdkPrint(PushappBase.deviceRegistrationPendingMessage);
       return;
     }
     sdkPrint("poll calling");
     try {
-      final pollUserId = userId.trim().isNotEmpty ? userId.trim() : this.userId.trim();
+      final pollUserId = userId.trim().isNotEmpty
+          ? userId.trim()
+          : this.userId.trim();
       if (pollUserId.isEmpty) {
         sdkPrint('Skipping in-app poll — no user id yet');
         return;
@@ -23,9 +26,7 @@ Future<void> _pollForNotificationData(String userId) async {
         'Content-Type': 'application/json',
         ...deviceHeaders,
       };
-      final requestBody = {
-        'contact_id': contactId,
-      };
+      final requestBody = {'contact_id': contactId};
 
       // Make HTTP request to poll endpoint
       final response = await _meSendHttpPost(
@@ -99,7 +100,9 @@ Future<void> _pollForNotificationData(String userId) async {
 
             _processNextFromQueue();
           } else {
-            sdkPrint("No new notifications from poll — keeping existing queue.");
+            sdkPrint(
+              "No new notifications from poll — keeping existing queue.",
+            );
           }
         } else {
           sdkPrint("Poll failed: ${responseData['message']}");
@@ -112,7 +115,6 @@ Future<void> _pollForNotificationData(String userId) async {
       sdkPrint("Error polling for notification data: $e");
     }
   }
-
 
   Future<void> _dispatchInlineInAppMessage(Map<String, dynamic> data) async {
     final templateStyle =
@@ -151,7 +153,9 @@ Future<void> _pollForNotificationData(String userId) async {
     }
 
     final sdk = TooltipSdk();
-    sdk.processApiResponse({'results': [item]});
+    sdk.processApiResponse({
+      'results': [item],
+    });
     await sdk.showTooltipFor(compareId);
 
     final messageId = meSendParseString(item['messageId']);
@@ -213,10 +217,14 @@ Future<void> _pollForNotificationData(String userId) async {
 
   String getAlignment(Map<String, dynamic> style) {
     sdkPrint(style.toString());
-    final vertical =
-        meSendParseString(style['vertical_align'], fallback: 'flex-end');
-    final horizontal =
-        meSendParseString(style['horizontal_align'], fallback: 'flex-end');
+    final vertical = meSendParseString(
+      style['vertical_align'],
+      fallback: 'flex-end',
+    );
+    final horizontal = meSendParseString(
+      style['horizontal_align'],
+      fallback: 'flex-end',
+    );
 
     String verticalPart;
     switch (vertical) {
@@ -247,9 +255,8 @@ Future<void> _pollForNotificationData(String userId) async {
     return '$verticalPart-$horizontalPart';
   }
 
-
-// ✅ NEW: Method to process notification data (extracted from existing logic)
-  void _processNotificationData(Map<String, dynamic> data) async{
+  // ✅ NEW: Method to process notification data (extracted from existing logic)
+  void _processNotificationData(Map<String, dynamic> data) async {
     final templateStyle =
         meSendCoerceMap(data['template']?['style']) ?? <String, dynamic>{};
     final type = meSendParseString(templateStyle['code']);
@@ -283,7 +290,9 @@ Future<void> _pollForNotificationData(String userId) async {
         type.toLowerCase().contains('roadblock') ||
         type.toLowerCase().contains('roadblock-image')) {
       sdkPrint("POPUP or ROADBLOCK");
-      if (contentList.isNotEmpty && overlayContext != null) {
+      if (contentList.isNotEmpty &&
+          overlayContext != null &&
+          overlayContext.mounted) {
         _showPopupRoadblock(
           contentList,
           messageId,
@@ -295,7 +304,9 @@ Future<void> _pollForNotificationData(String userId) async {
     }
     if (type.toLowerCase().contains('bottomsheet')) {
       sdkPrint("BottomSheet");
-      if (contentList.isNotEmpty && overlayContext != null) {
+      if (contentList.isNotEmpty &&
+          overlayContext != null &&
+          overlayContext.mounted) {
         _showBottomSheetBanner(
           contentList,
           messageId,
@@ -308,7 +319,9 @@ Future<void> _pollForNotificationData(String userId) async {
 
     if (type.toLowerCase().contains('banner')) {
       sdkPrint("BANNER");
-      if (contentList.isNotEmpty && overlayContext != null) {
+      if (contentList.isNotEmpty &&
+          overlayContext != null &&
+          overlayContext.mounted) {
         sdkPrint("Going in Show Banner");
         _showBanner(
           contentList,
@@ -326,15 +339,25 @@ Future<void> _pollForNotificationData(String userId) async {
       sdkPrint(style.toString());
       final align = getAlignment(style);
       sdkPrint(align);
-      if (contentList.isNotEmpty && overlayContext != null) {
-        _showPip(contentList, messageId, filterId, overlayContext, align: align);
+      if (contentList.isNotEmpty &&
+          overlayContext != null &&
+          overlayContext.mounted) {
+        _showPip(
+          contentList,
+          messageId,
+          filterId,
+          overlayContext,
+          align: align,
+        );
       }
     }
     if (type.toLowerCase().contains('floater')) {
       final align = getAlignment(style);
       final draggable = meSendParseBool(templateStyle['draggable']);
       sdkPrint("Going in Show Floater");
-      if (contentList.isNotEmpty && overlayContext != null) {
+      if (contentList.isNotEmpty &&
+          overlayContext != null &&
+          overlayContext.mounted) {
         sdkPrint("Calling Show Floater");
         _showFloater(
           contentList,
@@ -367,27 +390,27 @@ Future<void> _pollForNotificationData(String userId) async {
     }
   }
 
-
-
-  void _notifyPlaceholder(String placeholderId, List<dynamic> contentList, String? messageId, String? filterId) {
+  void _notifyPlaceholder(
+    String placeholderId,
+    List<dynamic> contentList,
+    String? messageId,
+    String? filterId,
+  ) {
     final listener = _placeholderListeners[placeholderId];
     if (listener != null) {
-      listener(contentList,messageId!,filterId!);
+      listener(contentList, messageId!, filterId!);
     } else {
       sdkPrint("No listener registered for placeholder: $placeholderId");
     }
   }
 
-
-
-
   void _showPip(
-      List<dynamic> contentList,
-      String messageId,
-      String filterId,
-      BuildContext context, {
-        String align = "bottom-right", // supports 9 alignments
-      }) {
+    List<dynamic> contentList,
+    String messageId,
+    String filterId,
+    BuildContext context, {
+    String align = "bottom-right", // supports 9 alignments
+  }) {
     if (contentList.isEmpty || contentList.first is! String) return;
 
     final htmlContent = contentList.first as String;
@@ -400,7 +423,7 @@ Future<void> _pollForNotificationData(String userId) async {
         // CRITICAL FIX 1: Set allowsInlineMediaPlayback to true
         allowsInlineMediaPlayback: true,
         // CRITICAL FIX 2: Allows autoplay for ALL media types
-        mediaTypesRequiringUserAction: {},
+        mediaTypesRequiringUserAction: const {},
       );
     } else {
       // 2. Use the default configuration for other platforms
@@ -410,7 +433,6 @@ Future<void> _pollForNotificationData(String userId) async {
     // 3. Create the controller using the platform parameters
     final controller = WebViewController.fromPlatformCreationParams(params);
     // --- END WebViewController INITIALIZATION ---
-
 
     controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -471,17 +493,19 @@ Future<void> _pollForNotificationData(String userId) async {
       ..loadHtmlString(htmlContent);
 
     // Map align string to Alignment
-    final alignment = {
-      'top-left': Alignment.topLeft,
-      'top-center': Alignment.topCenter,
-      'top-right': Alignment.topRight,
-      'center-left': Alignment.centerLeft,
-      'center-center': Alignment.center,
-      'center-right': Alignment.centerRight,
-      'bottom-left': Alignment.bottomLeft,
-      'bottom-center': Alignment.bottomCenter,
-      'bottom-right': Alignment.bottomRight,
-    }[align] ?? Alignment.bottomRight;
+    final alignment =
+        {
+          'top-left': Alignment.topLeft,
+          'top-center': Alignment.topCenter,
+          'top-right': Alignment.topRight,
+          'center-left': Alignment.centerLeft,
+          'center-center': Alignment.center,
+          'center-right': Alignment.centerRight,
+          'bottom-left': Alignment.bottomLeft,
+          'bottom-center': Alignment.bottomCenter,
+          'bottom-right': Alignment.bottomRight,
+        }[align] ??
+        Alignment.bottomRight;
 
     showDialog(
       context: context,
@@ -523,7 +547,11 @@ Future<void> _pollForNotificationData(String userId) async {
                             onTap: () {
                               Navigator.of(ctx).pop();
                               _showPopupRoadblock(
-                                  [htmlContent], messageId, filterId, context);
+                                [htmlContent],
+                                messageId,
+                                filterId,
+                                context,
+                              );
                             },
                           ),
                         ),
@@ -538,7 +566,11 @@ Future<void> _pollForNotificationData(String userId) async {
                           onTap: () {
                             Navigator.of(ctx).pop();
                             _showPopupRoadblock(
-                                [htmlContent], messageId, filterId, context);
+                              [htmlContent],
+                              messageId,
+                              filterId,
+                              context,
+                            );
                           },
                           child: Container(
                             height: 32,
@@ -547,7 +579,7 @@ Future<void> _pollForNotificationData(String userId) async {
                               color: Colors.black54,
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Center(
+                            child: const Center(
                               child: Icon(
                                 Icons.share,
                                 size: 18,
@@ -569,11 +601,11 @@ Future<void> _pollForNotificationData(String userId) async {
   }
 
   void _showFloater(
-      List<dynamic> contentList,
-      BuildContext context, {
-        String align = "bottom-right", // supports 9 alignments
-        bool draggable = false,
-      }) {
+    List<dynamic> contentList,
+    BuildContext context, {
+    String align = "bottom-right", // supports 9 alignments
+    bool draggable = false,
+  }) {
     if (contentList.isEmpty || contentList.first is! String) return;
     final String finalAlign = align;
     final htmlContent = contentList.first as String;
@@ -586,7 +618,7 @@ Future<void> _pollForNotificationData(String userId) async {
         // CRITICAL FIX 1: Set allowsInlineMediaPlayback to true
         allowsInlineMediaPlayback: true,
         // CRITICAL FIX 2: Allows autoplay for ALL media types
-        mediaTypesRequiringUserAction: {},
+        mediaTypesRequiringUserAction: const {},
       );
     } else {
       // 2. Use the default configuration for other platforms
@@ -654,17 +686,19 @@ Future<void> _pollForNotificationData(String userId) async {
       ..loadHtmlString(htmlContent);
 
     // Map align string to Alignment
-    final alignment = {
-      'top-left': Alignment.topLeft,
-      'top-center': Alignment.topCenter,
-      'top-right': Alignment.topRight,
-      'center-left': Alignment.centerLeft,
-      'center-center': Alignment.center,
-      'center-right': Alignment.centerRight,
-      'bottom-left': Alignment.bottomLeft,
-      'bottom-center': Alignment.bottomCenter,
-      'bottom-right': Alignment.bottomRight,
-    }[align] ?? Alignment.bottomRight;
+    final alignment =
+        {
+          'top-left': Alignment.topLeft,
+          'top-center': Alignment.topCenter,
+          'top-right': Alignment.topRight,
+          'center-left': Alignment.centerLeft,
+          'center-center': Alignment.center,
+          'center-right': Alignment.centerRight,
+          'bottom-left': Alignment.bottomLeft,
+          'bottom-center': Alignment.bottomCenter,
+          'bottom-right': Alignment.bottomRight,
+        }[align] ??
+        Alignment.bottomRight;
 
     // --- START OF INLINE DRAG IMPLEMENTATION ---
 
@@ -674,13 +708,13 @@ Future<void> _pollForNotificationData(String userId) async {
     const floaterMargin = 12.0;
 
     // 2. Variable to hold and persist the current position (must be mutable outside StatefulBuilder)
-    Offset? _currentOffset;
+    Offset? currentOffset;
 
     // Helper function to calculate initial Positioned Offset from Alignment
-    Offset _getInitialOffset(Alignment align, Size screenSize) {
+    Offset getInitialOffset(Alignment align, Size screenSize) {
       // Total occupied space (floater size + 2 * margin)
-      final totalWidth = floaterWidth + 2 * floaterMargin;
-      final totalHeight = floaterHeight + 2 * floaterMargin;
+      const totalWidth = floaterWidth + 2 * floaterMargin;
+      const totalHeight = floaterHeight + 2 * floaterMargin;
 
       // Calculate top-left X position
       double x = (screenSize.width - totalWidth) * ((align.x + 1) / 2);
@@ -703,7 +737,7 @@ Future<void> _pollForNotificationData(String userId) async {
         addedOffsetX = 20.0;
       }
 
-      return Offset(x-addedOffsetX, y-addedOffsetY);
+      return Offset(x - addedOffsetX, y - addedOffsetY);
     }
 
     // Display the floater using a transparent dialog
@@ -714,11 +748,10 @@ Future<void> _pollForNotificationData(String userId) async {
       barrierColor: const Color(0x01000000),
       builder: (ctx) => StatefulBuilder(
         builder: (stfContext, setState) {
-
           // 3. Calculate initial offset once (using context for screen size)
-          if (_currentOffset == null) {
+          if (currentOffset == null) {
             final screenSize = MediaQuery.of(stfContext).size;
-            _currentOffset = _getInitialOffset(alignment, screenSize);
+            currentOffset = getInitialOffset(alignment, screenSize);
           }
 
           // The core floater content widget
@@ -731,16 +764,16 @@ Future<void> _pollForNotificationData(String userId) async {
               // REMOVED: No borderRadius here
             ),
             child:
-            // REMOVED: ClipRRect wrapper
-            Stack(
-              children: [
-                /// WebView Content
-                Container(
-                  color: Colors.transparent,
-                  child: WebViewWidget(controller: controller),
+                // REMOVED: ClipRRect wrapper
+                Stack(
+                  children: [
+                    /// WebView Content
+                    Container(
+                      color: Colors.transparent,
+                      child: WebViewWidget(controller: controller),
+                    ),
+                  ],
                 ),
-              ],
-            ),
           );
 
           Widget positionedWidget;
@@ -749,20 +782,24 @@ Future<void> _pollForNotificationData(String userId) async {
             final screenSize = MediaQuery.of(stfContext).size;
 
             positionedWidget = Positioned(
-              left: _currentOffset!.dx,
-              top: _currentOffset!.dy,
+              left: currentOffset!.dx,
+              top: currentOffset!.dy,
               child: GestureDetector(
                 onPanUpdate: (details) {
                   setState(() {
                     // Update the offset, keeping it within screen bounds
-                    _currentOffset = Offset(
-                      (_currentOffset!.dx + details.delta.dx).clamp(
-                          floaterMargin, // Left bound
-                          screenSize.width - floaterWidth - floaterMargin // Right bound
+                    currentOffset = Offset(
+                      (currentOffset!.dx + details.delta.dx).clamp(
+                        floaterMargin, // Left bound
+                        screenSize.width -
+                            floaterWidth -
+                            floaterMargin, // Right bound
                       ),
-                      (_currentOffset!.dy + details.delta.dy).clamp(
-                          floaterMargin, // Top bound
-                          screenSize.height - floaterHeight - floaterMargin // Bottom bound
+                      (currentOffset!.dy + details.delta.dy).clamp(
+                        floaterMargin, // Top bound
+                        screenSize.height -
+                            floaterHeight -
+                            floaterMargin, // Bottom bound
                       ),
                     );
                   });
@@ -791,203 +828,199 @@ Future<void> _pollForNotificationData(String userId) async {
     );
   }
 
-
-
-//   // GLOBAL VARIABLE
-//   OverlayEntry? _floaterEntry;
-//
-// // NOTE: You must have a way to manage AppLifecycle.isAppInForeground
-// // See the Prerequisite section above.
-//
-//   void _showFloater(
-//       List<dynamic> contentList,
-//       BuildContext context, {
-//         String align = "bottom-right",
-//         bool draggable = false,
-//       }) {
-//
-//     // --- 🛑 CORE RESOLUTION FIX: GUARD CLAUSE 🛑 ---
-//     // If the floater is triggered while the app is paused (or coming from background),
-//     // this prevents it from being inserted until the app explicitly calls this method
-//     // AFTER the AppLifecycleState.resumed state is fully processed.
-//     if (!AppLifecycle.isAppInForeground) {
-//       debugPrint("❌ Floater prevented: App is not in the foreground.");
-//       return;
-//     }
-//     // ----------------------------------------------
-//
-//     if (contentList.isEmpty || contentList.first is! String) return;
-//
-//     // Wrap the entire show logic in a post-frame callback for timing stability.
-//     WidgetsBinding.instance.addPostFrameCallback((_) {
-//
-//       // --- STABILITY FIX 1: Check and remove existing entry ---
-//       if (_floaterEntry != null) {
-//         _floaterEntry!.remove();
-//         _floaterEntry = null;
-//         debugPrint("✅ Removed old floater entry before creating a new one.");
-//       }
-//       // --------------------------------------------------------
-//
-//       final htmlContent = contentList.first as String;
-//
-//       // --- WebViewController INITIALIZATION (FIXED FOR 4.4.2) ---
-//       PlatformWebViewControllerCreationParams params;
-//       if (Platform.isIOS) {
-//         params = WebKitWebViewControllerCreationParams(
-//           allowsInlineMediaPlayback: true,
-//           mediaTypesRequiringUserAction: {},
-//         );
-//       } else {
-//         params = const PlatformWebViewControllerCreationParams();
-//       }
-//
-//       final controller = WebViewController.fromPlatformCreationParams(params);
-//       // --- END WebViewController Initialization ---
-//
-//       controller..setJavaScriptMode(JavaScriptMode.unrestricted)
-//         ..setBackgroundColor(const Color(0x00000000))
-//         ..setNavigationDelegate(
-//           NavigationDelegate(
-//             onPageFinished: (url) async {
-//               // 1. JS Channel setup (simplified)
-//               await controller.runJavaScript('''
-//               window.handleClick = function(eventType, lab, val) {
-//                 var message = JSON.stringify({
-//                   event: eventType,
-//                   timestamp: Date.now(),
-//                   data: { url: "", label: lab, value: val }
-//                 });
-//                 // InAppChannel.postMessage(message);
-//               };
-//             ''');
-//
-//               // 2. Autoplay and Controls Fix
-//               await controller.runJavaScript('''
-//               document.querySelectorAll('video').forEach(function(v) {
-//                 v.controls = false;
-//                 v.removeAttribute('controls');
-//                 v.style.pointerEvents = 'none';
-//                 v.muted = true;
-//                 v.playsInline = true;
-//                 v.autoplay = true;
-//
-//                 var playPromise = v.play();
-//                 if (playPromise !== undefined) {
-//                   playPromise.catch(function(error) {
-//                     console.log('Autoplay blocked', error);
-//                   });
-//                 }
-//               });
-//             ''');
-//             },
-//           ),
-//         )
-//         ..loadHtmlString(htmlContent);
-//
-//       final overlay = Navigator.of(context).overlay;
-//       if (overlay == null) {
-//         debugPrint("❌ No Overlay found in this context!");
-//         return;
-//       }
-//
-//       final size = MediaQuery.of(context).size;
-//       const double floaterSize = 200.0;
-//       const double padding = 16.0;
-//
-//       // Alignment-based starting position
-//       Offset initialOffset;
-//       switch (align) {
-//         case "top-left":
-//           initialOffset = const Offset(padding, padding);
-//           break;
-//         case "top-right":
-//           initialOffset = Offset(size.width - floaterSize - padding, padding);
-//           break;
-//         case "bottom-left":
-//           initialOffset = Offset(padding, size.height - floaterSize - padding);
-//           break;
-//         case "bottom-right":
-//         default:
-//           initialOffset = Offset(
-//             size.width - floaterSize - padding,
-//             size.height - floaterSize - padding,
-//           );
-//       }
-//
-//       final positionNotifier = ValueNotifier<Offset>(initialOffset);
-//       final showWebView = ValueNotifier(false);
-//
-//       final entry = OverlayEntry(
-//         builder: (ctx) => ValueListenableBuilder<Offset>(
-//           valueListenable: positionNotifier,
-//           builder: (context, offset, _) {
-//             return Positioned(
-//               left: offset.dx,
-//               top: offset.dy,
-//               child: GestureDetector(
-//                 onPanUpdate: draggable
-//                     ? (details) {
-//                   final newOffset = Offset(
-//                     offset.dx + details.delta.dx,
-//                     offset.dy + details.delta.dy,
-//                   );
-//                   positionNotifier.value = Offset(
-//                     newOffset.dx.clamp(0, size.width - floaterSize),
-//                     newOffset.dy.clamp(0, size.height - floaterSize),
-//                   );
-//                 }
-//                     : null,
-//                 child: AnimatedOpacity(
-//                   opacity: 1,
-//                   duration: const Duration(milliseconds: 200),
-//                   child: RepaintBoundary(
-//                     child: Container(
-//                       height: floaterSize,
-//                       width: floaterSize,
-//                       decoration: BoxDecoration(
-//                         color: Colors.transparent,
-//                         borderRadius: BorderRadius.circular(16),
-//                       ),
-//                       child: ClipRRect(
-//                         borderRadius: BorderRadius.circular(16),
-//                         child: ValueListenableBuilder<bool>(
-//                           valueListenable: showWebView,
-//                           builder: (context, visible, _) {
-//                             if (!visible) return const SizedBox.shrink();
-//                             return WebViewWidget(controller: controller);
-//                           },
-//                         ),
-//                       ),
-//                     ),
-//                   ),
-//                 ),
-//               ),
-//             );
-//           },
-//         ),
-//       );
-//
-//       // Insert the entry into the overlay
-//       overlay.insert(entry);
-//       entry.markNeedsBuild();
-//
-//       // Use a short delay before showing the WebView contents for surface stability
-//       Future.delayed(const Duration(milliseconds: 200), () {
-//         showWebView.value = true;
-//       });
-//
-//       _floaterEntry = entry;
-//     }); // End of addPostFrameCallback
-//   }
-//
-// // --- HIDE FLOATER FUNCTION ---
-//   void _hideFloater() {
-//     _floaterEntry?.remove();
-//     _floaterEntry = null;
-//   }
-
-
+  //   // GLOBAL VARIABLE
+  //   OverlayEntry? _floaterEntry;
+  //
+  // // NOTE: You must have a way to manage AppLifecycle.isAppInForeground
+  // // See the Prerequisite section above.
+  //
+  //   void _showFloater(
+  //       List<dynamic> contentList,
+  //       BuildContext context, {
+  //         String align = "bottom-right",
+  //         bool draggable = false,
+  //       }) {
+  //
+  //     // --- 🛑 CORE RESOLUTION FIX: GUARD CLAUSE 🛑 ---
+  //     // If the floater is triggered while the app is paused (or coming from background),
+  //     // this prevents it from being inserted until the app explicitly calls this method
+  //     // AFTER the AppLifecycleState.resumed state is fully processed.
+  //     if (!AppLifecycle.isAppInForeground) {
+  //       debugPrint("❌ Floater prevented: App is not in the foreground.");
+  //       return;
+  //     }
+  //     // ----------------------------------------------
+  //
+  //     if (contentList.isEmpty || contentList.first is! String) return;
+  //
+  //     // Wrap the entire show logic in a post-frame callback for timing stability.
+  //     WidgetsBinding.instance.addPostFrameCallback((_) {
+  //
+  //       // --- STABILITY FIX 1: Check and remove existing entry ---
+  //       if (_floaterEntry != null) {
+  //         _floaterEntry!.remove();
+  //         _floaterEntry = null;
+  //         debugPrint("✅ Removed old floater entry before creating a new one.");
+  //       }
+  //       // --------------------------------------------------------
+  //
+  //       final htmlContent = contentList.first as String;
+  //
+  //       // --- WebViewController INITIALIZATION (FIXED FOR 4.4.2) ---
+  //       PlatformWebViewControllerCreationParams params;
+  //       if (Platform.isIOS) {
+  //         params = WebKitWebViewControllerCreationParams(
+  //           allowsInlineMediaPlayback: true,
+  //           mediaTypesRequiringUserAction: {},
+  //         );
+  //       } else {
+  //         params = const PlatformWebViewControllerCreationParams();
+  //       }
+  //
+  //       final controller = WebViewController.fromPlatformCreationParams(params);
+  //       // --- END WebViewController Initialization ---
+  //
+  //       controller..setJavaScriptMode(JavaScriptMode.unrestricted)
+  //         ..setBackgroundColor(const Color(0x00000000))
+  //         ..setNavigationDelegate(
+  //           NavigationDelegate(
+  //             onPageFinished: (url) async {
+  //               // 1. JS Channel setup (simplified)
+  //               await controller.runJavaScript('''
+  //               window.handleClick = function(eventType, lab, val) {
+  //                 var message = JSON.stringify({
+  //                   event: eventType,
+  //                   timestamp: Date.now(),
+  //                   data: { url: "", label: lab, value: val }
+  //                 });
+  //                 // InAppChannel.postMessage(message);
+  //               };
+  //             ''');
+  //
+  //               // 2. Autoplay and Controls Fix
+  //               await controller.runJavaScript('''
+  //               document.querySelectorAll('video').forEach(function(v) {
+  //                 v.controls = false;
+  //                 v.removeAttribute('controls');
+  //                 v.style.pointerEvents = 'none';
+  //                 v.muted = true;
+  //                 v.playsInline = true;
+  //                 v.autoplay = true;
+  //
+  //                 var playPromise = v.play();
+  //                 if (playPromise !== undefined) {
+  //                   playPromise.catch(function(error) {
+  //                     console.log('Autoplay blocked', error);
+  //                   });
+  //                 }
+  //               });
+  //             ''');
+  //             },
+  //           ),
+  //         )
+  //         ..loadHtmlString(htmlContent);
+  //
+  //       final overlay = Navigator.of(context).overlay;
+  //       if (overlay == null) {
+  //         debugPrint("❌ No Overlay found in this context!");
+  //         return;
+  //       }
+  //
+  //       final size = MediaQuery.of(context).size;
+  //       const double floaterSize = 200.0;
+  //       const double padding = 16.0;
+  //
+  //       // Alignment-based starting position
+  //       Offset initialOffset;
+  //       switch (align) {
+  //         case "top-left":
+  //           initialOffset = const Offset(padding, padding);
+  //           break;
+  //         case "top-right":
+  //           initialOffset = Offset(size.width - floaterSize - padding, padding);
+  //           break;
+  //         case "bottom-left":
+  //           initialOffset = Offset(padding, size.height - floaterSize - padding);
+  //           break;
+  //         case "bottom-right":
+  //         default:
+  //           initialOffset = Offset(
+  //             size.width - floaterSize - padding,
+  //             size.height - floaterSize - padding,
+  //           );
+  //       }
+  //
+  //       final positionNotifier = ValueNotifier<Offset>(initialOffset);
+  //       final showWebView = ValueNotifier(false);
+  //
+  //       final entry = OverlayEntry(
+  //         builder: (ctx) => ValueListenableBuilder<Offset>(
+  //           valueListenable: positionNotifier,
+  //           builder: (context, offset, _) {
+  //             return Positioned(
+  //               left: offset.dx,
+  //               top: offset.dy,
+  //               child: GestureDetector(
+  //                 onPanUpdate: draggable
+  //                     ? (details) {
+  //                   final newOffset = Offset(
+  //                     offset.dx + details.delta.dx,
+  //                     offset.dy + details.delta.dy,
+  //                   );
+  //                   positionNotifier.value = Offset(
+  //                     newOffset.dx.clamp(0, size.width - floaterSize),
+  //                     newOffset.dy.clamp(0, size.height - floaterSize),
+  //                   );
+  //                 }
+  //                     : null,
+  //                 child: AnimatedOpacity(
+  //                   opacity: 1,
+  //                   duration: const Duration(milliseconds: 200),
+  //                   child: RepaintBoundary(
+  //                     child: Container(
+  //                       height: floaterSize,
+  //                       width: floaterSize,
+  //                       decoration: BoxDecoration(
+  //                         color: Colors.transparent,
+  //                         borderRadius: BorderRadius.circular(16),
+  //                       ),
+  //                       child: ClipRRect(
+  //                         borderRadius: BorderRadius.circular(16),
+  //                         child: ValueListenableBuilder<bool>(
+  //                           valueListenable: showWebView,
+  //                           builder: (context, visible, _) {
+  //                             if (!visible) return const SizedBox.shrink();
+  //                             return WebViewWidget(controller: controller);
+  //                           },
+  //                         ),
+  //                       ),
+  //                     ),
+  //                   ),
+  //                 ),
+  //               ),
+  //             );
+  //           },
+  //         ),
+  //       );
+  //
+  //       // Insert the entry into the overlay
+  //       overlay.insert(entry);
+  //       entry.markNeedsBuild();
+  //
+  //       // Use a short delay before showing the WebView contents for surface stability
+  //       Future.delayed(const Duration(milliseconds: 200), () {
+  //         showWebView.value = true;
+  //       });
+  //
+  //       _floaterEntry = entry;
+  //     }); // End of addPostFrameCallback
+  //   }
+  //
+  // // --- HIDE FLOATER FUNCTION ---
+  //   void _hideFloater() {
+  //     _floaterEntry?.remove();
+  //     _floaterEntry = null;
+  //   }
 
   String _resolveNotificationClickUrl(Map<String, dynamic>? style) {
     if (style == null) {
@@ -1170,13 +1203,13 @@ Future<void> _pollForNotificationData(String userId) async {
   }
 
   void _showBanner(
-      List<dynamic> contentList,
-      String messageId,
-      String filterId,
-      BuildContext context, {
-        Map<String, dynamic>? templateStyle,
-        String align = "top",
-      }) {
+    List<dynamic> contentList,
+    String messageId,
+    String filterId,
+    BuildContext context, {
+    Map<String, dynamic>? templateStyle,
+    String align = "top",
+  }) {
     if (contentList.isEmpty || contentList.first is! String) {
       sdkPrint("No banner HTML found.");
       return;
@@ -1186,8 +1219,10 @@ Future<void> _pollForNotificationData(String userId) async {
 
     final notificationClickUrl = _resolveNotificationClickUrl(templateStyle);
     final htmlContent = _ensureBannerTransparentHtml(
-      (contentList.first as String)
-          .replaceAll('[[ALIGN]]', align == 'bottom' ? 'banner-bottom' : 'banner-top'),
+      (contentList.first as String).replaceAll(
+        '[[ALIGN]]',
+        align == 'bottom' ? 'banner-bottom' : 'banner-top',
+      ),
     );
 
     final controller = WebViewController();
@@ -1233,7 +1268,9 @@ Future<void> _pollForNotificationData(String userId) async {
       barrierDismissible: true,
       barrierColor: Colors.transparent,
       builder: (context) => Align(
-        alignment: align == 'bottom' ? Alignment.bottomCenter : Alignment.topCenter,
+        alignment: align == 'bottom'
+            ? Alignment.bottomCenter
+            : Alignment.topCenter,
         child: Container(
           height: 100,
           width: MediaQuery.of(context).size.width,
@@ -1242,9 +1279,7 @@ Future<void> _pollForNotificationData(String userId) async {
             borderRadius: BorderRadius.circular(10),
             child: Stack(
               children: [
-                SizedBox.expand(
-                  child: WebViewWidget(controller: controller),
-                ),
+                SizedBox.expand(child: WebViewWidget(controller: controller)),
                 // Close button
                 Positioned(
                   top: 4,
@@ -1267,9 +1302,7 @@ Future<void> _pollForNotificationData(String userId) async {
         ),
       ),
     );
-
   }
-
 
   void _showPopupRoadblock(
     List<dynamic> contentList,
@@ -1308,7 +1341,6 @@ Future<void> _pollForNotificationData(String userId) async {
     Widget contentWidget;
 
     if (htmlContent.isNotEmpty) {
-
       // 1️⃣ Create platform-specific params
       late final PlatformWebViewControllerCreationParams params;
 
@@ -1322,7 +1354,7 @@ Future<void> _pollForNotificationData(String userId) async {
         params = const PlatformWebViewControllerCreationParams();
       }
 
-// 2️⃣ Create controller
+      // 2️⃣ Create controller
       final controller = WebViewController.fromPlatformCreationParams(params);
 
       controller
@@ -1408,8 +1440,6 @@ Future<void> _pollForNotificationData(String userId) async {
         )
         ..loadHtmlString(htmlContent);
 
-
-
       contentWidget = WebViewWidget(controller: controller);
     } else {
       final imageWidget = Image.network(
@@ -1426,7 +1456,7 @@ Future<void> _pollForNotificationData(String userId) async {
               filterId: filterId,
               notificationUrl: notificationClickUrl,
             );
-            if (Navigator.canPop(context)) {
+            if (context.mounted && Navigator.canPop(context)) {
               Navigator.of(context).pop();
             }
             _onNotificationClosed();
@@ -1453,36 +1483,35 @@ Future<void> _pollForNotificationData(String userId) async {
               ),
 
               // Close button overlay
-          Positioned(
-            top: 40,
-            right: 20,
-            child: _inAppCloseButton(
-              onPressed: () {
-                trackInAppEvent(
-                  messageId: messageId,
-                  event: "dismissed",
-                  completion: (success) {},
-                );
-                Navigator.of(context).pop();
-                _onNotificationClosed();
-              },
-            ),
-          )
-          ],
+              Positioned(
+                top: 40,
+                right: 20,
+                child: _inAppCloseButton(
+                  onPressed: () {
+                    trackInAppEvent(
+                      messageId: messageId,
+                      event: "dismissed",
+                      completion: (success) {},
+                    );
+                    Navigator.of(context).pop();
+                    _onNotificationClosed();
+                  },
+                ),
+              ),
+            ],
           ),
         );
       },
     );
   }
 
-
   void _showBottomSheetBanner(
-      List<dynamic> contentList,
-      String messageId,
-      String filterId,
-      BuildContext context, {
-      Map<String, dynamic>? templateStyle,
-      }) async {
+    List<dynamic> contentList,
+    String messageId,
+    String filterId,
+    BuildContext context, {
+    Map<String, dynamic>? templateStyle,
+  }) async {
     String htmlContent = '';
     String imageUrl = '';
     final notificationClickUrl = _resolveNotificationClickUrl(templateStyle);
@@ -1522,7 +1551,7 @@ Future<void> _pollForNotificationData(String userId) async {
         // This prevents the video from going fullscreen on iOS.
         allowsInlineMediaPlayback: true,
         // Allows autoplay for ALL media types (resolves the 'none' error)
-        mediaTypesRequiringUserAction: {},
+        mediaTypesRequiringUserAction: const {},
       );
     } else {
       // 2. Use the default configuration for other platforms
@@ -1534,7 +1563,6 @@ Future<void> _pollForNotificationData(String userId) async {
     // --- END WebViewController INITIALIZATION ---
 
     if (htmlContent.isNotEmpty) {
-
       controller
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0x00000000))
@@ -1623,7 +1651,7 @@ Future<void> _pollForNotificationData(String userId) async {
               filterId: filterId,
               notificationUrl: notificationClickUrl,
             );
-            if (Navigator.canPop(context)) {
+            if (context.mounted && Navigator.canPop(context)) {
               Navigator.of(context).pop();
             }
             _onNotificationClosed();
@@ -1656,9 +1684,7 @@ Future<void> _pollForNotificationData(String userId) async {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: SizedBox.expand(
-                      child: contentWidget,
-                    ),
+                    child: SizedBox.expand(child: contentWidget),
                   ),
                   Positioned(
                     top: 8,
@@ -1684,10 +1710,7 @@ Future<void> _pollForNotificationData(String userId) async {
     );
   }
 
-
-
-
-  void _handleJsMessage(String body,String messageId,String filterId) async {
+  void _handleJsMessage(String body, String messageId, String filterId) async {
     debugPrint("📩 JS → Flutter message: $body");
 
     try {
@@ -1760,7 +1783,9 @@ Future<void> _pollForNotificationData(String userId) async {
     if (!_ensureDeviceRegistered('trackInAppEvent')) {
       return;
     }
-    final url = Uri.parse('$serverUrl/pushapp/api/v1/notification/in-app/track');
+    final url = Uri.parse(
+      '$serverUrl/pushapp/api/v1/notification/in-app/track',
+    );
     sdkPrint("trackInAppEvent → $url");
 
     try {
@@ -1773,10 +1798,7 @@ Future<void> _pollForNotificationData(String userId) async {
       };
 
       // Build request body
-      final body = <String, dynamic>{
-        'messageId': messageId,
-        'event': event,
-      };
+      final body = <String, dynamic>{'messageId': messageId, 'event': event};
 
       if (filterId != null) body['filterId'] = filterId;
       if (ctaId != null) body['data'] = {'ctaId': ctaId};
@@ -1802,7 +1824,6 @@ Future<void> _pollForNotificationData(String userId) async {
       rethrow;
     } catch (e) {
       sdkPrint("In-app track request failed: $e");
-
 
       completion(false);
     }

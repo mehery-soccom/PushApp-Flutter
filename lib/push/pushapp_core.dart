@@ -646,6 +646,7 @@ Future<void> track(Map<String, dynamic> event) async {
     await _loginNow(userId);
   }
 
+  @override
   Future<void> _loginNow(String userId) async {
     final prefs = await SharedPreferences.getInstance();
     final refreshSameUser =
@@ -973,7 +974,7 @@ Future<void> ping() async {
 
       if (response.statusCode == 200) {
         sdkPrint("Event sent successfully!");
-        _pollForNotificationData(this.userId);
+        _pollForNotificationData(userId);
         return true;
       } else {
         sdkPrint("Failed to send event: ${response.body}");

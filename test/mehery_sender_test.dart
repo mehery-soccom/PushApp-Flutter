@@ -1,11 +1,10 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mehery_sender/mehery_sender.dart';
-import 'package:mehery_sender/mesend_parsing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Pushapp testPushApp({String identifier = 'demo_123'}) {
@@ -372,7 +371,7 @@ void main() {
 
     test('androidChannelId defaults and uses category', () {
       expect(
-        MeSendDataPushPayload(
+        const MeSendDataPushPayload(
           category: 'Promo',
           title: 'x',
           body: 'y',
@@ -380,7 +379,7 @@ void main() {
         'mesend_promo',
       );
       expect(
-        MeSendDataPushPayload(title: 'x', body: 'y').androidChannelId,
+        const MeSendDataPushPayload(title: 'x', body: 'y').androidChannelId,
         'mesend_default',
       );
     });
@@ -646,8 +645,8 @@ void main() {
 
     test('MeSendDataPushPayload parses data-only title and body', () {
       final payload = MeSendDataPushPayload.fromRemoteMessage(
-        RemoteMessage(
-          data: const {
+        const RemoteMessage(
+          data: {
             'type': 'notification',
             'category': 'CONTENT_CATEGORY',
             'title': 'Test title',
@@ -663,8 +662,8 @@ void main() {
 
     test('MeSendDataPushPayload parses message1 and message2 data fields', () {
       final payload = MeSendDataPushPayload.fromRemoteMessage(
-        RemoteMessage(
-          data: const {
+        const RemoteMessage(
+          data: {
             'type': 'notification',
             'message1': 'Title from message1',
             'message2': 'Body from message2',
@@ -787,7 +786,7 @@ void main() {
           .handlePlatformMessage(
         meherySenderMethodChannel,
         const StandardMethodCodec().encodeMethodCall(
-          MethodCall('trackNotification', {
+          const MethodCall('trackNotification', {
             'token': 'click-token',
             'event': 'cta',
             'ctaId': 'action1',

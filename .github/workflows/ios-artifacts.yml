@@ -1,0 +1,58 @@
+name: iOS artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-example-ios:
+    name: Build example app (iOS Simulator)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install SDK dependencies
+        run: flutter pub get
+
+      - name: Run SDK tests
+        run: flutter test
+
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Build example for iOS Simulator
+        working-directory: example
+        run: flutter build ios --simulator --debug --no-codesign
+
+      - name: Zip .app
+        run: |
+          APP=$(find example/build/ios -type d -name 'Runner.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "No Runner.app found" && exit 1
+          fi
+          echo "Found: $APP"
+          cd "$(dirname "$APP")"
+          ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP")" "$RUNNER_TEMP/PushAppFlutterExample.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-example-ios-simulator-app
+          path: ${{ runner.temp }}/PushAppFlutterExample.zip
+          retention-days: 30

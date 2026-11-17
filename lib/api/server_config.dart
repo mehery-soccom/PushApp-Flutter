@@ -28,8 +28,8 @@ String pushappHostTld({
   return sandbox ? 'net' : 'ai';
 }
 
-class _PushappServerBase {
-  const _PushappServerBase({required this.serverUrl, required this.wsUrl});
+class PushappServerBase {
+  const PushappServerBase({required this.serverUrl, required this.wsUrl});
 
   final String serverUrl;
   final String wsUrl;
@@ -38,7 +38,7 @@ class _PushappServerBase {
 /// Normalizes a custom PushApp base (e.g. ngrok) into HTTP [serverUrl] and WebSocket URL.
 ///
 /// Accepts `https://host`, `https://host/pushapp`, or trailing slashes.
-_PushappServerBase parsePushappServerBase(String baseUrl) {
+PushappServerBase parsePushappServerBase(String baseUrl) {
   var normalized = baseUrl.trim();
   while (normalized.endsWith('/')) {
     normalized = normalized.substring(0, normalized.length - 1);
@@ -52,7 +52,7 @@ _PushappServerBase parsePushappServerBase(String baseUrl) {
           ? 'ws://'
           : 'wss://';
   final host = normalized.replaceFirst(RegExp(r'^https?://'), '');
-  return _PushappServerBase(
+  return PushappServerBase(
     serverUrl: normalized,
     wsUrl: '$wsScheme$host/pushapp',
   );
